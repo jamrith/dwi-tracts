@@ -22,6 +22,8 @@
 #SBATCH --export=NONE
 
 # Load relevant modules here
+module load fsl-img
+module load conda-img
 
 # Preprocessing steps
 cmd="./run_bedpostx_postproc.py $1 $2"

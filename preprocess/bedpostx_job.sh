@@ -1,6 +1,8 @@
 #!/usr/bin/bash
 
-#SBATCH --partition=imgq
+#SBATCH --qos=img
+
+#SBATCH --partition=imgcomputeq
 # This specifies type of node job will use
 
 #SBATCH --nodes=1
@@ -12,14 +14,14 @@
 #SBATCH --mem=20g
 # This specifies maximum memory use will be 20 gigabytes
 
-#SBATCH --time=30:00:00
+#SBATCH --time=20:00:00
 # This specifies job will last no longer than 30 hours
 
 #SBATCH -o logs/bedpostx-%j.out
 
 # Load relevant modules here
 
-cmd="./run_subject_bedpostx.py $1 $2"
+cmd="./run_bedpostx.py $1 $2"
 
 echo $cmd
 eval $cmd

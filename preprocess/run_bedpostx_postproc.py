@@ -53,7 +53,7 @@ def process_subject(subject, config):
     session = config_gen['session']
     if len(session) > 0:
         session = '{0}/'.format(session)
-    output_dir = '{0}/{1}/{2}dwi'.format(deriv_dir, subject, session)
+    output_dir = '{0}/{1}/{2}/dwi'.format(deriv_dir, subject, session)
     
     flag_file = '{0}/{1}/bedpostx.done'.format(output_dir, config_gen['flags_dir'])
     if not os.path.isfile(flag_file):
@@ -68,27 +68,32 @@ def process_subject(subject, config):
         print('Subject {0} already post-processed. Clobbering.'.format(subject))
     
     bedpostx_dir = '{0}/bedpostX'.format(output_dir)
+    
+    if os.path.exists(bedpostx_dir) and os.path.isdir(bedpostx_dir):
+        print('{0} already exists.'.format(bedpostx_dir))
+    else:
+        # Clean up
+        # Move bedpost directory to proper location
+        dummy_dir = '{0}.bedpostX'.format(output_dir)
+        cmd = 'mv {0} {1}'.format(dummy_dir, bedpostx_dir)
+        print('\t{}'.format(cmd))
+        err = run_fsl(cmd)
+        if err:
+            print('\tError cleaning up BedpostX [{0}]: {1}'.format(subject,err))
+            return False
 
-    # Clean up
-    # Move bedpost directory to proper location
-    dummy_dir = '{0}.bedpostX'.format(output_dir)
-    cmd = 'mv {0} {1}'.format(dummy_dir, bedpostx_dir)
-    print('\t{}'.format(cmd))
-    err = run_fsl(cmd)
-    if err:
-        print('\tError cleaning up BedpostX [{0}]: {1}'.format(subject,err))
-        return False
 
-    output_img = '{0}/dwi_{1}.nii.gz' \
-                    .format(output_dir, config_bpx['bet_suffix'])
+    output_img = '{0}/dwi_{1}.nii.gz'.format(output_dir, config_bpx['bet_suffix'])
 
-    cmd = 'rm {0}/nodif*; rm {0}/bv*; mv {0}/data.nii.gz {1}' \
-                    .format(output_dir, output_img)
-    print('\t{}'.format(cmd))
-    err = run_fsl(cmd)
-    if err:
-        print('\tError cleaning up DWI folder [{0}]: {1}'.format(subject,err))
-        return False
+    if os.path.isfile(output_img):
+        print('\t{0} already exists. Skipping cleanup.'.format(output_img))
+    else:
+        cmd = 'rm {0}/nodif*; rm {0}/bv*; mv {0}/data.nii.gz {1}'.format(output_dir, output_img)
+        print('\t{}'.format(cmd))
+        err = run_fsl(cmd)
+        if err:
+            print('\tError cleaning up DWI folder [{0}]: {1}'.format(subject, err))
+            return False
     
     # Step 4: Warping to template space
     #      4.1: Linear transform (FLIRT)

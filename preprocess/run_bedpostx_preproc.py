@@ -76,7 +76,7 @@ def process_subject(subject, config):
         dwi_img = '{0}/data.nii.gz' \
                         .format(output_dir)
 
-        input_img = '{0}/{1}.nii.gz'.format(input_dir, subj)
+        input_img = '{0}/{1}_dwi.nii.gz'.format(input_dir, subj)
 
         output_img = '{0}/{1}.nii.gz' \
                         .format(output_dir, config_bpx['eddy_suffix'])
@@ -115,8 +115,8 @@ def process_subject(subject, config):
 
         nodif_img = '{0}/nodif.nii.gz'.format(output_dir)
         
-        bval_file = '{0}/{1}{2}.bval'.format(input_dir, subj)
-        bvec_file = '{0}/{1}{2}.bvec'.format(input_dir, subj)
+        bval_file = '{0}/{1}_dwi.bval'.format(input_dir, subj)
+        bvec_file = '{0}/{1}_dwi.bvec'.format(input_dir, subj)
         bet_mask_img = '{0}/nodif_brain_mask.nii.gz'.format(output_dir)
 
         if (os.path.exists(bet_img) or os.path.exists(nodif_img)) and not config_gen['clobber']:
@@ -127,7 +127,7 @@ def process_subject(subject, config):
             
             bzeros = []
             with open(bval_file, 'r') as csvfile:
-                reader = csv.reader(csvfile, delimiter=' ')
+                reader = csv.reader(csvfile, delimiter='	')
                 for row in reader:
                     if len(row) > 0:
                         c = 0

@@ -1,36 +1,27 @@
 #!/usr/bin/env python
 
-# Runs ProbtrackX on a single subject, for a specific seed ROI
+# Runs ProbtrackX on a single subject for all ROIs
 # Requires that BedpostX has already been run for this subject
-# Target ROIs and other parameters must be specified in a JSON file
+# ROIs and other parameters must be specified in a JSON file
+# Use GPU version by setting "use_gpu": true in the probtrackx config section
 
 # Command line arguments to this script:
 # Arg1: subject ID
-# Arg2: seed ROI
-# Arg3: configuration file
+# Arg2: configuration file
 
 import subprocess
 import sys
 import os
 import csv
 from subprocess import Popen
-import shutil
-
-# Load configuration parameters from JSON file
 import json
-
-def _json_object_hook(d): return namedtuple('X', d.keys())(*d.values())
-def json2obj(data): return json.loads(data, object_hook=_json_object_hook)
 
 def main():
 
     global config
-    global roi
 
-    roi = sys.argv[2]
-
-    with open(sys.argv[3], 'r') as myfile:
-        json_string=myfile.read() #.replace('\n', '')
+    with open(sys.argv[2], 'r') as myfile:
+        json_string=myfile.read()
 
     config = json.loads(json_string)
     config_gen = config['general']
@@ -40,7 +31,7 @@ def main():
     # Run this subject
     subject = sys.argv[1]
 
-    append = '';
+    append = ''
     if is_dryrun:
         append = ' [DRY RUN]'
 
@@ -55,15 +46,32 @@ def run_fsl(cmd):
     global config
     is_dryrun = config['general']['dryrun']
 
-#     print('Dry run? {0}'.format(is_dryrun))
-
     if is_dryrun:
-#         print('Not executing command');
         return ''
     else:
         sp = Popen(cmd, shell=True, stderr=subprocess.PIPE)
         out, err = sp.communicate()
         return err
+
+def build_mask_command(fsl_bin, mask_paths, output_path):
+    if not mask_paths:
+        return None
+    cmd = '{0}fslmaths {1}'.format(fsl_bin, mask_paths[0])
+    for mask_path in mask_paths[1:]:
+        cmd = '{0} -add {1}'.format(cmd, mask_path)
+    return '{0} {1}'.format(cmd, output_path)
+
+def generate_mask(fsl_bin, mask_paths, output_path, verbose, subject, label):
+    cmd = build_mask_command(fsl_bin, mask_paths, output_path)
+    if not cmd:
+        return False
+    if verbose:
+        print(cmd)
+    err = run_fsl(cmd)
+    if err:
+        print('\tError creating {0} mask [{1}]: {2}'.format(label, subject, err))
+        return None
+    return True
 
 def probtrackx_subject(subject):
     # Generate probabilistic streamlines between all pairs of ROIs
@@ -98,15 +106,13 @@ def probtrackx_subject(subject):
 
     if not os.path.isdir(probtrackx_dir):
         os.makedirs(probtrackx_dir)
-    # else:
-#         if config_gen['clobber']:
-#             shutil.rmtree(probtrackx_dir)
-#             os.makedirs(probtrackx_dir)
+        else:
+            if config_gen['clobber']:
+                shutil.rmtree(probtrackx_dir)
+                os.makedirs(probtrackx_dir)
 
-    invxfm_img     = '{0}/reg3G/FA_warp2Mean3G.nii.gz'.format(subj_dir)
-    xfm_img     = '{0}/reg3G/Mean3G_warp2FA.nii.gz'.format(subj_dir)
-
-#     print('{0} | {1}'.format(xfm_img, invxfm_img)
+    invxfm_img = '{0}/reg3G/FA_warp2Mean3G.nii.gz'.format(subj_dir)
+    xfm_img = '{0}/reg3G/Mean3G_warp2FA.nii.gz'.format(subj_dir)
 
     # Check whether BedpostX output exists, otherwise fail
     if not bedpostx_done:
@@ -120,23 +126,50 @@ def probtrackx_subject(subject):
     # Read ROI list
     rois = []
     target_rois = {}
+    exclusion_masks = {}
 
-    # If this is a JSON file, read as networks and targets
+    # If this is a JSON file, read as networks with seeds and targets
     if config_ptx['roi_list'].endswith('.json'):
         with open(config_ptx['roi_list'], 'r') as myfile:
             json_string=myfile.read()
 
         netconfig = json.loads(json_string)
         networks = netconfig['networks']
-        targets = netconfig['targets']
 
+        # Each network has its own seeds and targets
+        # We need to track bidirectionally: seed->targets and targets->seed
         for net in networks:
-            others = []
-            for net2 in targets[net]:
-                others = others + networks[net2]
-            for roii in networks[net]:
-                rois.append(roii)
-                target_rois[roii] = others
+            seeds = net.get('seeds', [])
+            targets = net.get('targets', [])
+            exclusion = net.get('exclusion', [])
+
+            # For each seed, add all targets
+            for seed in seeds:
+                if seed not in rois:
+                    rois.append(seed)
+                if seed not in target_rois:
+                    target_rois[seed] = []
+                target_rois[seed].extend(targets)
+                if seed not in exclusion_masks:
+                    exclusion_masks[seed] = []
+                exclusion_masks[seed].extend(exclusion)
+
+            # For each target, add all seeds (bidirectional)
+            for target in targets:
+                if target not in rois:
+                    rois.append(target)
+                if target not in target_rois:
+                    target_rois[target] = []
+                target_rois[target].extend(seeds)
+                if target not in exclusion_masks:
+                    exclusion_masks[target] = []
+                exclusion_masks[target].extend(exclusion)
+
+        # Remove duplicates from target lists
+        for roii in target_rois:
+            target_rois[roii] = list(set(target_rois[roii]))
+        for roii in exclusion_masks:
+            exclusion_masks[roii] = list(set(exclusion_masks[roii]))
     else:
         with open(config_ptx['roi_list'],'r') as roi_file:
             reader = csv.reader(roi_file)
@@ -151,75 +184,84 @@ def probtrackx_subject(subject):
                     targets.append(roi2)
             target_rois[roii] = targets
 
-    # For each ROI seed
-    #for roi in rois:
+    # Determine whether to use GPU version based on config
+    use_gpu = config_ptx.get('use_gpu', False)
+    probtrackx_cmd = 'probtrackx2_gpu' if use_gpu else 'probtrackx2'
 
-    roi_file = '{0}/{1}.nii'.format(rois_dir, roi)
-    roi_list = '{0}/others_{1}.txt'.format(probtrackx_dir, roi)
+    # For each ROI seed, run probtrackx
+    for roi in rois:
+        roi_file = '{0}/{1}.nii.gz'.format(rois_dir, roi)
+        roi_list = '{0}/others_{1}.txt'.format(probtrackx_dir, roi)
 
-    cmd_add = ''
+        # Build list of other ROIs
+        target_mask_paths = []
+        with open(roi_list,'w') as listout:
+            for roi2 in target_rois[roi]:
+                # Add to ROI list
+                mask_path = '{0}/{1}.nii.gz'.format(rois_dir, roi2)
+                listout.write('{0}\n'.format(mask_path))
+                target_mask_paths.append(mask_path)
 
-    # Build list of other ROIs
-    with open(roi_list,'w') as listout:
-        for roi2 in target_rois[roi]:
-            # Add to ROI list
-            listout.write('{0}/{1}.nii\n'.format(rois_dir, roi2))
-            # Add to "others" stop image
-            if not cmd_add:
-                cmd_add = '{0}fslmaths {1}/{2}.nii'.format(fsl_bin, rois_dir, roi2)
-            else:
-                cmd_add = '{0} -add {1}/{2}.nii'.format(cmd_add, rois_dir, roi2)
+        stop_img = '{0}/{1}_others.nii.gz'.format(probtrackx_dir, roi)
+        stop_built = generate_mask(fsl_bin, target_mask_paths, stop_img, config_gen['verbose'], subject, 'stop')
+        if stop_built is None:
+            return False
+        if not stop_built:
+            print('\tNo targets found for ROI {0}; skipping. [{1}]'.format(roi, subject))
+            continue
 
-    stop_img = '{0}/{1}_others.nii.gz'.format(probtrackx_dir, roi)
-    cmd_add = '{0} {1}'.format(cmd_add, stop_img)
+        exclusion_paths = ['{0}/exclusion_masks/{1}.nii.gz'.format(rois_dir, mask) for mask in exclusion_masks.get(roi, [])]
+        avoid_img = '{0}/{1}_avoid.nii.gz'.format(probtrackx_dir, roi)
+        avoid_built = generate_mask(fsl_bin, exclusion_paths, avoid_img, config_gen['verbose'], subject, 'exclusion')
+        if avoid_built is None:
+            return False
+        if not avoid_built:
+            avoid_img = None
 
-    if config_gen['verbose']:
-        print(cmd_add)
-    err = run_fsl(cmd_add)
-    if err:
-        print('\tError creating stop mask [{0}]: {1}'.format(subject,err))
-        return False
+        cmd_pre = '{0}{1} -V 0 --distthresh={2} --sampvox={3} --forcedir --opd --opathdir ' \
+                  '-x {4} -l --onewaycondition -c {5} --nsteps={6} --steplength={7} --nsamples={8} --fibthresh={9} --s2tastext ' \
+                  '--xfm={10} --invxfm={11} -s {12}/merged -m {12}/nodif_brain_mask' \
+                    .format(fsl_bin, probtrackx_cmd, config_ptx['distthresh'], config_ptx['sampvox'], roi_file, \
+                           config_ptx['cthr'], config_ptx['nsteps'], config_ptx['steplength'], \
+                           config_ptx['nsamples'], config_ptx['fibthresh'], xfm_img, invxfm_img, \
+                           bedpostx_dir)
 
-    cmd_pre = '{0}probtrackx2 -V 0 --distthresh={1} --sampvox={2} --forcedir --opd --opathdir ' \
-              '-x {3} -l --onewaycondition -c {4} --nsteps={5} --steplength={6} --nsamples={7} --fibthresh={8} --s2tastext ' \
-              '--xfm={9} --invxfm={10} -s {11}/merged -m {11}/nodif_brain_mask' \
-                .format(fsl_bin, config_ptx['distthresh'], config_ptx['sampvox'], roi_file, \
-                       config_ptx['cthr'], config_ptx['nsteps'], config_ptx['steplength'], \
-                       config_ptx['nsamples'], config_ptx['fibthresh'], xfm_img, invxfm_img, \
-                       bedpostx_dir)
+        avoid_arg = ' --avoid={0}'.format(avoid_img) if avoid_img else ''
+        cmd_net = ' --stop={0}{2} -V 0 --waypoints={0} --waycond=OR --omatrix2 ' \
+                  ' --target2={0} --os2t --targetmasks={1} --otargetpaths' \
+                    .format(stop_img, roi_list, avoid_arg)
 
-    cmd_net = ' --stop={0} -V 0 --waypoints={0} --waycond=OR --omatrix2 ' \
-              ' --target2={0} --os2t --targetmasks={1} --otargetpaths' \
-                .format(stop_img, roi_list)
+        cmd = '{0} {1} --pd --dir={2}/{3}' \
+                    .format(cmd_pre, cmd_net, probtrackx_dir, roi)
 
-    cmd = '{0} {1} --pd --dir={2}/{3}' \
-                .format(cmd_pre, cmd_net, probtrackx_dir, roi)
+        if config_gen['verbose']:
+            print(cmd)
 
-    if config_gen['verbose']:
-        print(cmd)
+        err = run_fsl(cmd)
+        if err:
+            print('\tError running ProbtrackX [{0}]: {1}'.format(subject,err))
+            return False
 
-    err = run_fsl(cmd)
-    if err:
-        print('\tError running ProbtrackX [{0}]: {1}'.format(subject,err))
-        return False
+        cmd = '{0} {1} --pd --dir={2}/{3} -o FreeTracking' \
+                    .format(cmd_pre, cmd_net, probtrackx_dir, roi)
+        if config_gen['verbose']:
+            print(cmd)
+        err = run_fsl(cmd)
+        if err:
+            print('\tError running ProbtrackX free-tracking [{0}]: {1}'.format(subject,err))
+            return False
 
-    cmd = '{0} {1} --pd --dir={2}/{3} -o FreeTracking' \
-                .format(cmd_pre, cmd_net, probtrackx_dir, roi)
-    if config_gen['verbose']:
-        print(cmd)
-    err = run_fsl(cmd)
-    if err:
-        print('\tError running ProbtrackX free-tracking [{0}]: {1}'.format(subject,err))
-        return False
+        print('\tDone tracking for ROI {0} [{1}]'.format(roi, subject))
 
-    print('\tDone tracking for ROI {0} [{1}]'.format(roi, subject))
-
-    # Clean up
-    cmd = 'rm {0}; rm {1}'.format(stop_img, roi_list)
-    err = run_fsl(cmd)
-    if err:
-        print('\tError cleaning up ProbtrackX folder [{0}]: {1}'.format(subject,err))
-        return False
+        # Clean up
+        cleanup_targets = [stop_img, roi_list]
+        if avoid_img:
+            cleanup_targets.append(avoid_img)
+        cmd = '; '.join('rm {0}'.format(path) for path in cleanup_targets)
+        err = run_fsl(cmd)
+        if err:
+            print('\tError cleaning up ProbtrackX folder [{0}]: {1}'.format(subject,err))
+            return False
 
     return True
 

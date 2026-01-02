@@ -22,9 +22,11 @@
 #SBATCH --export=NONE
 
 # Load relevant modules here
+module load conda-img/python3.7
+module load fsl-img
 
 # Preprocessing steps
-cmd="./run_bedpostx_preproc.py $1 $2"
+cmd="python run_bedpostx_preproc.py $1 $2"
 
 echo $cmd
 eval $cmd

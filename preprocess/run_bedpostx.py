@@ -119,7 +119,7 @@ def process_subject(subject, config):
             
             bzeros = []
             with open(bval_file, 'r') as csvfile:
-                reader = csv.reader(csvfile, delimiter=' ')
+                reader = csv.reader(csvfile, delimiter='	')
                 for row in reader:
                     if len(row) > 0:
                         c = 0

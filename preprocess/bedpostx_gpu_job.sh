@@ -22,9 +22,12 @@
 #SBATCH --export=NONE
 
 # Load relevant modules here
+module load fsl-img/6.0.6.3
+module load conda-img/python3.7
+source activate dwi-tracts
 
 # Preprocessing steps
-cmd="./run_bedpostx_gpu.py $1 $2"
+cmd="python run_bedpostx_gpu.py $1 $2"
 
 echo $cmd
 eval $cmd
