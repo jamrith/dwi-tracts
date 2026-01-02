@@ -248,6 +248,7 @@ class DwiTracts:
                     except Exception as e:
                         if verbose:
                             print('  ** Error processing subject {0} [skipping]: {1}'.format(subject, e))
+                        continue
                         return False
 
             if passed:
@@ -1072,7 +1073,12 @@ class DwiTracts:
                                                    'probtrackX', params_gen['network_name'], roi_a)
                         avdir_file = '{0}/target_localdir_{1}.nii.gz'.format(subject_dir, roi_b)
 
-                        V_img3 = nib.load(avdir_file)
+                        try:
+                            V_img3 = nib.load(avdir_file)
+                        except:
+                            if verbose:
+                                print('  ** Warning: Could not load {0} for subject {1}. Skipping this subject.'.format(avdir_file, subject))
+                            continue
                         V_dir = V_img3.get_fdata()
                         V_dir[np.less(V_tract, tract_thresh)] = 0
 
@@ -1090,7 +1096,12 @@ class DwiTracts:
                                                    'probtrackX', params_gen['network_name'], roi_b)
                         avdir_file = '{0}/target_localdir_{1}.nii.gz'.format(subject_dir, roi_a)
 
-                        V_img3 = nib.load(avdir_file)
+                        try:
+                            V_img3 = nib.load(avdir_file)
+                        except:
+                            if verbose:
+                                print('  ** Warning: Could not load {0} for subject {1}. Skipping this subject.'.format(avdir_file, subject))
+                            continue
                         V_dir = V_img3.get_fdata()
                         V_dir[np.less(V_tract, tract_thresh)] = 0
 
@@ -1175,7 +1186,13 @@ class DwiTracts:
                 beta_file = '{0}/betas_mni_sm_{1}um_{2}.nii.gz' \
                                   .format(subj_dir, int(1000.0*params_regress['beta_sm_fwhm']), tract)
                 
-                img = nib.load(beta_file)
+                try:
+                    img = nib.load(beta_file)
+                except:
+                    if verbose:
+                        print('  ** Warning: Could not load beta file {0} for subject {1}. Skipping this subject.'.format(beta_file, subject))
+                    continue
+
                 V_beta = img.get_fdata()
                 
                 if V_sum is None:
@@ -1340,13 +1357,16 @@ def process_tsa_subject( subject, my_dwi, verbose=False, debug=False ):
 #             rois_a.append(roi_a)
 #             rois_b.append(roi_b)
 
-    prefix_sub = '{0}{1}'.format(params_gen['prefix'], subject)
+    if len(params_gen['prefix']) > 0:
+        prefix_sub = '{0}{1}'.format(params_gen['prefix'], subject)
+    else:
+        prefix_sub = subject
     subject_dir = os.path.join(my_dwi.project_dir, params_gen['deriv_dir'], prefix_sub, params_gen['sub_dirs'])
 
     dwi_dir = os.path.join(subject_dir, params_gen['dwi_dir'])
     ptx_dir = os.path.join(dwi_dir,'probtrackX', params_gen['network_name'])
 
-    bet_file = '{0}/{1}_{2}_dwi_bet.nii.gz'.format(dwi_dir, prefix_sub, params_gen['sub_dirs'])
+    bet_file = '{0}/dwi_bet.nii.gz'.format(dwi_dir)
     warp_file = '{0}/reg3G/Mean3G_warp2FA.nii.gz'.format(dwi_dir)
     invwarp_file = '{0}/reg3G/FA_warp2Mean3G.nii.gz'.format(dwi_dir)
     bvec_file = '{0}/bedpostX/bvecs'.format(dwi_dir)
@@ -1469,9 +1489,14 @@ def process_tsa_subject( subject, my_dwi, verbose=False, debug=False ):
     
             if success:
                 # Load warped average vectors
-                V_tract = nib.load(tract_file).get_data()
-                V_avrdir = nib.load(avrdir_file).get_data()
-                
+                try:
+                    V_tract = nib.load(tract_file).get_data()
+                    V_avrdir = nib.load(avrdir_file).get_data()
+                except:
+                    if verbose:
+                        print('  ** Warning: Could not load {0} for subject {1}. Skipping this subject.'.format(tract_file, subject))
+                    continue
+
                 V_beta = np.zeros(V_tract.shape, float)
                 V_tvals = np.zeros(V_tract.shape, float)
                 V_pvals = np.zeros(V_tract.shape, float)

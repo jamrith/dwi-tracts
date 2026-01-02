@@ -399,7 +399,7 @@ def read_bvecs( filename ):
 def run_fsl(cmd, dryrun=False):
     if dryrun:
         return ''
-    cmd = '{0};{1}'.format('. /usr/local/fsl/etc/fslconf/fsl.sh', cmd)
+    cmd = '{0};{1}'.format('. $FSLDIR/etc/fslconf/fsl.sh', cmd)
     sp = Popen(cmd, shell=True, stderr=subprocess.PIPE)
     out, err = sp.communicate()
     return err
@@ -626,36 +626,43 @@ def get_clusters( pvals, tvals, alpha, min_clust=1 ):
     return clusters
 
 # Identify and label clusters in a set of t-values using 1-dimensional
-# random field theory
+# random field theory. Handles positive and negative clusters separately.
 def get_tvalue_rft1d_clusters( tvals, alpha, df, fwhm, min_clust ):
 
-    tvals_abs = np.abs(tvals)
-    t_max = np.max(tvals_abs)
     N_nodes = tvals.size
     pvals = np.ones(N_nodes)
-    clusters = np.zeros(N_nodes)
+    clusters = np.zeros(N_nodes, dtype=int)
 
     t_star = rft1d.t.isf(alpha, df, N_nodes, fwhm)
-    if t_star < t_max:
-        # Significant main (tract-wise) effect of this factor
-        calc = rft1d.geom.ClusterMetricCalculator()
-        k_nodes = calc.cluster_extents(tvals_abs, t_star, interp=True)
-        k_resels = [kk/fwhm for kk in k_nodes]
-        c = len(k_resels)
-        rftcalc = rft1d.prob.RFTCalculator(STAT='T', df=(1,df), nodes=N_nodes, FWHM=fwhm)
-        k_min = min(k_resels)
-        P_set = rftcalc.p.set(c, k_min, t_star)
-        P_cluster = [rftcalc.p.cluster(kk, t_star) for kk in k_resels]
-        if len(P_cluster) == 1:
-            if np.count_nonzero(tvals_abs>t_star) >= min_clust:
-                pvals[tvals_abs>t_star] = P_cluster
-                clusters = np.zeros(N_nodes)
-                clusters[tvals_abs>t_star] = 1
-        else:
-            clusters = get_clusters(-tvals_abs, tvals, -t_star, min_clust)
-            cvals = np.unique(clusters[clusters>0])
-            for c in cvals:
-                pvals[clusters==c] = P_cluster[c-1]
+    rftcalc = rft1d.prob.RFTCalculator(STAT='T', df=(1,df), nodes=N_nodes, FWHM=fwhm)
+
+    cluster_label = 1
+
+    # Process positive clusters (tvals >= t_star)
+    calc_pos = rft1d.geom.ClusterMetricCalculatorInitialized(tvals, t_star, interp=True, wrap=False)
+    extents_pos, _, _, L_pos = calc_pos.get_all()
+
+    for i, k_nodes in enumerate(extents_pos):
+        if k_nodes >= min_clust:
+            k_resels = k_nodes / fwhm
+            p_cluster = rftcalc.p.cluster(k_resels, t_star)
+            mask = (L_pos == (i + 1))
+            clusters[mask] = cluster_label
+            pvals[mask] = p_cluster
+            cluster_label += 1
+
+    # Process negative clusters (-tvals >= t_star, i.e., tvals <= -t_star)
+    calc_neg = rft1d.geom.ClusterMetricCalculatorInitialized(-tvals, t_star, interp=True, wrap=False)
+    extents_neg, _, _, L_neg = calc_neg.get_all()
+
+    for i, k_nodes in enumerate(extents_neg):
+        if k_nodes >= min_clust:
+            k_resels = k_nodes / fwhm
+            p_cluster = rftcalc.p.cluster(k_resels, t_star)
+            mask = (L_neg == (i + 1))
+            clusters[mask] = cluster_label
+            pvals[mask] = p_cluster
+            cluster_label += 1
 
     return pvals, clusters
 

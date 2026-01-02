@@ -85,7 +85,7 @@ class DwiTractsGlm:
             return False
 
         Xs = {}
-#         subjects = self.subject_data['Subject'].values
+        subjects = self.subject_data['Subject'].values
         N_sub = len(subjects)
         self.subjects = subjects
         
@@ -151,39 +151,16 @@ class DwiTractsGlm:
         rois_b = []
 
         # Read ROI list
-        rois = []
-        target_rois = {}
-
-        # If this is a JSON file, read as networks and targets
+        # If this is a JSON file, read as networks w/ seeds and targets
         if params_ptx['roi_list'].endswith('.json'):
             with open(params_ptx['roi_list'], 'r') as myfile:
                 json_string=myfile.read()
 
             netconfig = json.loads(json_string)
             networks = netconfig['networks']
-            targets = netconfig['targets']
-
-            for net in networks:
-                others = []
-                for net2 in targets[net]:
-                    others = others + networks[net2]
-                for roi in networks[net]:
-                    rois.append(roi)
-                    target_rois[roi] = others
-        else:
-            with open(params_ptx['roi_list'],'r') as roi_file:
-                reader = csv.reader(roi_file)
-                for row in reader:
-                    rois.append(row[0])
-
-            # All ROIs are targets
-            for i in range(0, len(rois)):
-                targets = []
-                roi = rois[i]
-                for j in range(i+1, len(rois)):
-                    roi2 = rois[j]
-                    targets.append(roi2)
-                target_rois[roi] = targets
+            rois = [net['seeds'][0] for net in netconfig['networks']] # Assuming only one seed per network
+            target_rois = {net['seeds'][0]: net['targets'] for net in netconfig['networks']}
+            #TODO: Multiple seed networks handling
 
         self.rois = rois
         self.target_rois = {}
@@ -286,8 +263,9 @@ class DwiTractsGlm:
                 # Tract mask as index vector
                 idx = np.flatnonzero(V_tract)
                 idx3 = np.nonzero(V_tract)
-                idx4 = np.dstack([idx3]*N_sub)
                 V_betas = np.zeros((N_sub, idx.size))
+                missing_ix = np.zeros(N_sub, dtype='bool')
+
                 resid_hdr = copy.copy(V_img.header)
                 shape = resid_hdr.get_data_shape()
                 resid_hdr.set_data_shape(shape + (N_sub,))
@@ -303,9 +281,16 @@ class DwiTractsGlm:
                     beta_file = '{0}/betas_mni_sm_{1}um_{2}.nii.gz' \
                                           .format(subj_output_dir, int(1000.0*params_regress['beta_sm_fwhm']), tract_name)
 
-                    V_sub = nib.load(beta_file).get_fdata()
-                    V_betas[i,:] = V_sub.ravel()[idx]
+                    try:
+                        V_sub = nib.load(beta_file).get_fdata()
+                        V_betas[i,:] = V_sub.ravel()[idx]
+                    except FileNotFoundError:
+                        missing_ix[i] = True
                     i += 1
+
+                print(f"Missing tract data for {np.sum(missing_ix)} rows.")
+
+                V_betas = V_betas[~missing_ix]
 
                 # Now evaluate GLMs for each voxel
                 for glm in params_glm:
@@ -1485,9 +1470,10 @@ class DwiTractsGlm:
             V_mask = np.squeeze(V_mask)
 #             print(V_mask.shape)
 
-        for roi1 in self.rois:
-            for roi2 in self.rois:
-                fname = '{0}/final/{1}_{2}_{3}.nii.gz'.format(self.tracts_dir, prefix, roi1, roi2)
+        for seed_roi, target_rois in self.target_rois.items():
+            for target_roi in target_rois:
+                fname = '{0}/final/{1}_{2}_{3}.nii.gz'.format(self.tracts_dir, prefix, seed_roi, target_roi)
+                print(fname)
                 if os.path.isfile(fname):
                     img_files.append(fname)
         
@@ -1627,15 +1613,24 @@ class DwiTractsGlm:
     # verbose:     Whether to print progress to screen
     #
     def create_pajek_graphs( self, suffix='-perm', edge_val='tsum', verbose=False, clobber=False ):
-        
+
         params_glm = self.params['glm']
         params_gen = self.params['general']
         metric = params_gen['summary_metric']
-        
+
         tract_thresh = self.params['traces']['tract_threshold']
         thresh_str = '{0:02d}'.format(round(tract_thresh*100))
-        
-        roi_centers = utils.compute_roi_centers( self.rois_dir, self.rois, output_file=None, \
+
+        # Build complete list of all unique ROIs (seeds and targets)
+        all_rois = []
+        for seed, targets in self.target_rois.items():
+            if seed not in all_rois:
+                all_rois.append(seed)
+            for target in targets:
+                if target not in all_rois:
+                    all_rois.append(target)
+
+        roi_centers = utils.compute_roi_centers( self.rois_dir, all_rois, output_file=None, \
                                                  extension=self.roi_suffix, verbose=False )
         
         for glm in params_glm:
@@ -1665,13 +1660,13 @@ class DwiTractsGlm:
 
                 N_fpos = len(T_fpos.index)
                 N_fneg = len(T_fneg.index)
-                N_roi = len(self.rois)
+                N_roi = len(all_rois)
 
                 # Write stats for this factor
                 A = np.zeros((N_roi, N_roi))
                 for itr, row in T_fpos.iterrows():
-                    ii = self.rois.index(row.From)
-                    jj = self.rois.index(row.To)
+                    ii = all_rois.index(row.From)
+                    jj = all_rois.index(row.To)
                     if edge_val == 'tcount':
                         A[ii,jj] = row.T_count
                     elif edge_val == 'tsum':
@@ -1683,15 +1678,15 @@ class DwiTractsGlm:
                     
                 output_file = '{0}/{1}{2}_{3}_pos.net'.format(output_dir, edge_val, suffix, factor_str)
 
-                utils.write_matrix_to_pajek( A, output_file, directed=False, labels=self.rois, coords=roi_centers )
+                utils.write_matrix_to_pajek( A, output_file, directed=False, labels=all_rois, coords=roi_centers )
                 if verbose:
                     print('  Wrote positive Pajek graph for {0}'.format(factor_str))
 
                 #if N_fneg > 0:
                 A = np.zeros((N_roi, N_roi))
                 for itr, row in T_fneg.iterrows():
-                    ii = self.rois.index(row.From)
-                    jj = self.rois.index(row.To)
+                    ii = all_rois.index(row.From)
+                    jj = all_rois.index(row.To)
                     if edge_val == 'tcount':
                         A[ii,jj] = row.T_count
                     elif edge_val == 'tsum':
@@ -1700,16 +1695,215 @@ class DwiTractsGlm:
                         A[ii,jj] = row.T_mean_all
                 output_file = '{0}/{1}{2}_{3}_neg.net'.format(output_dir, edge_val, suffix, factor_str)
 
-                utils.write_matrix_to_pajek( A, output_file, directed=False, labels=self.rois, coords=roi_centers )
+                utils.write_matrix_to_pajek( A, output_file, directed=False, labels=all_rois, coords=roi_centers )
                 if verbose:
                     print('  Wrote negative Pajek graph for {0}'.format(factor_str))
                     
         return True
-                    
-    
-    # Aggregate stats distance-wise (i.e., for each distance along the tract) for all GLMs 
+
+
+    # Plot Pajek-style network graphs for each GLM/factor using matplotlib.
+    # Reads the .net files created by create_pajek_graphs().
+    #
+    # suffix:       Suffix indicating the statistical approach used (default = "-perm")
+    # edge_val:     The value used for edge weights; one of "tsum", "tcount", or "tmean"
+    # edge_thresh:  Minimum edge weight to display (default=0)
+    # node_size:    Base size for nodes (default=300)
+    # edge_scale:   Scale factor for edge widths (default=1.0)
+    # figsize:      Figure size as tuple (default=(10,10))
+    # cmap_pos:     Colormap for positive effects (default='Reds')
+    # cmap_neg:     Colormap for negative effects (default='Blues')
+    # verbose:      Whether to print progress to screen
+    #
+    def plot_pajek_graphs( self, suffix='-perm', edge_val='tsum', edge_thresh=0,
+                           node_size=300, edge_scale=1.0, figsize=(10,10),
+                           cmap_pos='Reds', cmap_neg='Blues', verbose=False ):
+
+        params_glm = self.params['glm']
+
+        figures = {}
+
+        for glm in params_glm:
+            if verbose:
+                print( glm )
+
+            pajek_dir = '{0}/glms/{1}/pajek'.format(self.tracts_dir, glm)
+            if not os.path.isdir(pajek_dir):
+                print('Pajek directory not found: {0}'.format(pajek_dir))
+                print('Please run create_pajek_graphs() first.')
+                return None
+
+            output_dir = '{0}/glms/{1}/figures'.format(self.tracts_dir, glm)
+            if not os.path.isdir(output_dir):
+                os.makedirs(output_dir)
+
+            factors = params_glm[glm]['factors'].copy()
+            figures[glm] = {}
+
+            for factor in factors[1:]:
+                factor_str = factor.replace('*','X')
+                if verbose:
+                    print(' {0}'.format(factor))
+
+                # Read positive Pajek file
+                pajek_file_pos = '{0}/{1}{2}_{3}_pos.net'.format(pajek_dir, edge_val, suffix, factor_str)
+                pajek_file_neg = '{0}/{1}{2}_{3}_neg.net'.format(pajek_dir, edge_val, suffix, factor_str)
+
+                if not os.path.isfile(pajek_file_pos):
+                    print('Pajek file not found: {0}'.format(pajek_file_pos))
+                    print('Please run create_pajek_graphs() with edge_val="{0}" and suffix="{1}" first.'.format(edge_val, suffix))
+                    return None
+
+                labels_pos, coords_pos, A_pos = self._read_pajek_file(pajek_file_pos)
+                labels_neg, coords_neg, A_neg = self._read_pajek_file(pajek_file_neg)
+
+                # Plot positive effects
+                fig_pos, ax_pos = plt.subplots(figsize=figsize)
+                self._plot_network(ax_pos, A_pos, labels_pos, np.array([]),
+                                   edge_thresh=edge_thresh, node_size=node_size,
+                                   edge_scale=edge_scale, cmap=cmap_pos,
+                                   title='{0} - {1} (positive)'.format(glm, factor_str))
+                output_file = '{0}/{1}{2}_{3}_pos.png'.format(output_dir, edge_val, suffix, factor_str)
+                fig_pos.savefig(output_file, dpi=150, bbox_inches='tight', facecolor='white')
+                if verbose:
+                    print('  Saved positive graph to {0}'.format(output_file))
+
+                # Plot negative effects
+                fig_neg, ax_neg = plt.subplots(figsize=figsize)
+                self._plot_network(ax_neg, A_neg, labels_neg, np.array([]),
+                                   edge_thresh=edge_thresh, node_size=node_size,
+                                   edge_scale=edge_scale, cmap=cmap_neg,
+                                   title='{0} - {1} (negative)'.format(glm, factor_str))
+                output_file = '{0}/{1}{2}_{3}_neg.png'.format(output_dir, edge_val, suffix, factor_str)
+                fig_neg.savefig(output_file, dpi=150, bbox_inches='tight', facecolor='white')
+                if verbose:
+                    print('  Saved negative graph to {0}'.format(output_file))
+
+                figures[glm][factor_str] = {'pos': fig_pos, 'neg': fig_neg}
+
+        return figures
+
+
+    # Read a Pajek .net file and return labels, coordinates, and adjacency matrix
+    def _read_pajek_file(self, filepath):
+        labels = []
+        coords = []
+        edges = []
+        N = 0
+
+        with open(filepath, 'r') as f:
+            lines = f.readlines()
+
+        mode = None
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.lower().startswith('*vertices'):
+                N = int(line.split()[1])
+                mode = 'vertices'
+                continue
+            elif line.lower().startswith('*edges') or line.lower().startswith('*arcs'):
+                mode = 'edges'
+                continue
+
+            if mode == 'vertices':
+                parts = line.split()
+                # Parse label (in quotes)
+                label_match = re.search(r'"([^"]+)"', line)
+                if label_match:
+                    labels.append(label_match.group(1))
+                else:
+                    labels.append(parts[0])
+                # Parse coordinates (after the label)
+                if label_match:
+                    after_label = line[label_match.end():].strip().split()
+                    if len(after_label) >= 3:
+                        coords.append([float(after_label[0]), float(after_label[1]), float(after_label[2])])
+                    else:
+                        coords.append([0, 0, 0])
+                else:
+                    coords.append([0, 0, 0])
+
+            elif mode == 'edges':
+                parts = line.split()
+                if len(parts) >= 2:
+                    i = int(parts[0]) - 1  # Pajek uses 1-based indexing
+                    j = int(parts[1]) - 1
+                    w = float(parts[2]) if len(parts) >= 3 else 1.0
+                    edges.append((i, j, w))
+
+        # Build adjacency matrix
+        A = np.zeros((N, N))
+        for i, j, w in edges:
+            A[i, j] = w
+            A[j, i] = w  # Assuming undirected
+
+        return labels, np.array(coords), A
+
+
+    # Helper function to plot a network graph
+    def _plot_network(self, ax, A, labels, coords, edge_thresh=0, node_size=300,
+                      edge_scale=1.0, cmap='Reds', title=''):
+
+        N = len(labels)
+
+        # Use first two dimensions for 2D plot (typically x, y in MNI space)
+        if coords.shape[0] > 0 and coords.shape[1] >= 2:
+            pos = {i: coords[i, :2] for i in range(N)}
+        else:
+            # Fallback to circular layout if coords are invalid
+            angles = np.linspace(0, 2*np.pi, N, endpoint=False)
+            pos = {i: (np.cos(angles[i]), np.sin(angles[i])) for i in range(N)}
+
+        # Get colormap
+        cmap_obj = plt.cm.get_cmap(cmap)
+
+        # Draw edges
+        edges = []
+        weights = []
+        for i in range(N):
+            for j in range(i+1, N):
+                w = A[i,j] + A[j,i]
+                if w > edge_thresh:
+                    edges.append((i, j))
+                    weights.append(w)
+
+        if len(weights) > 0:
+            max_weight = max(weights)
+            for (i, j), w in zip(edges, weights):
+                x = [pos[i][0], pos[j][0]]
+                y = [pos[i][1], pos[j][1]]
+                norm_w = w / max_weight if max_weight > 0 else 0
+                ax.plot(x, y, color=cmap_obj(0.3 + 0.7*norm_w),
+                        linewidth=1 + 4*norm_w*edge_scale, alpha=0.7, zorder=1)
+
+        # Draw nodes
+        node_x = [pos[i][0] for i in range(N)]
+        node_y = [pos[i][1] for i in range(N)]
+
+        # Color nodes by degree (sum of connections)
+        degrees = np.sum(A, axis=0) + np.sum(A, axis=1)
+        max_deg = max(degrees) if max(degrees) > 0 else 1
+        node_colors = [cmap_obj(0.2 + 0.6*d/max_deg) for d in degrees]
+
+        ax.scatter(node_x, node_y, s=node_size, c=node_colors, edgecolors='black',
+                   linewidths=1, zorder=2)
+
+        # Draw labels
+        for i, label in enumerate(labels):
+            ax.annotate(label, (pos[i][0], pos[i][1]), fontsize=8, ha='center', va='bottom',
+                        xytext=(0, 5), textcoords='offset points')
+
+        ax.set_title(title, fontsize=12)
+        ax.set_aspect('equal')
+        ax.axis('off')
+
+
+    # Aggregate stats distance-wise (i.e., for each distance along the tract) for all GLMs
     # & factors.
-    # 
+    #
     #
     def aggregate_distance_stats( self, verbose=False ):
         

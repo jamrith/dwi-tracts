@@ -711,7 +711,7 @@ def plot_glm_results( params, my_glm, verbose=False, debug=False ):
             vals.append(levels[key])
             lnames.append(key)
         if vals[1] < vals[0]:
-            lnames = reversed(lnames)
+            lnames = list(reversed(lnames))
         
         has_pos = np.sum(betas_pos[~np.isnan(betas_pos)] != 0) > 0
         has_neg = np.sum(betas_neg[~np.isnan(betas_neg)] != 0) > 0
@@ -918,7 +918,7 @@ def plot_glm_results( params, my_glm, verbose=False, debug=False ):
             lnames.append(key)
         
         if vals[1] < vals[0]:
-            lnames = reversed(lnames)
+            lnames = list(reversed(lnames))
         
         factor_str = factor.replace('*','X')   
         

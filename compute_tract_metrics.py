@@ -91,6 +91,7 @@ params_plot['stat'] = 'density'
 params_plot['xlim'] = [-0.25, 0.75]
 params_plot['xticks'] = [-0.25, 0.0, 0.25, 0.50, 0.75]
 params_plot['color'] = '#2b3ad1'  # blue
+params_plot['image_format'] = 'pdf'
 
 tract_names = None
 
