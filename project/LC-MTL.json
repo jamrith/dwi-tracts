@@ -1,0 +1,15 @@
+  {
+    "networks": [
+      {
+        "seeds": ["LC_L"],
+        "targets": ["Ent_L", "PirTB_L", "PirT_L"],
+        "exclusion": ["LC_Stop","csf","zPlane_86"]
+      },
+      {
+        "seeds": ["LC_R"],
+        "targets": ["Ent_R", "PirTB_R", "PirT_R"],
+        "exclusion": ["LC_Stop","csf","zPlane_86"]
+      }
+    ]
+  }
+

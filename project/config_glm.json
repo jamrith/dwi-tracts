@@ -2,8 +2,9 @@
 "general":
    {
     "preproc_config_file":   "project/config_preprocess.json",
-    "tracts_config_file":    "project/config_tracts.json",
-    "covariates_file":       "",
+    "tracts_config_file":    "project/config_tracts_lc.json",
+    "covariates_file":       "project/covariates_basic.csv",
+    "subjects_file":         "project/glm_subjects.list",
     "standardized_beta":     false,
     "glm_output_dir":        "glms",
     "tract_threshold":       0.4,
@@ -23,22 +24,34 @@
       {
       "factors":
             [
-            "Factor1",
-            "Factor2",
-            "Factor1*Factor2"
+            "AGE",
+            "FEMALE",
+            "AD",
+            "MCI"
             ],
       "categorical":
             {
-            "Factor1":         true,
-            "Factor2":         false,
-            "Factor1*Factor2": false
+            "AGE":             false,
+            "FEMALE":          true,
+            "AD":              true,
+            "MCI":             true,
+            "CN":              true
             },
-      "levels":
-            {
-            "Factor1":
+      "levels": {
+            "FEMALE":
                 {
-                 "Level1": 1,
-                 "Level2": 2
+                 "Male": "0",
+                 "Female": "1"
+                },
+            "AD":
+                {
+                  "No dementia": "0",
+                  "Probable AD": "1"
+                },
+            "MCI":
+                {
+                  "No MCI": "0",
+                  "MCI": "1"
                 }
             },
       "intercept":          true,
