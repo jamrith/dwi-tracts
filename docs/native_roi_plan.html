@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Native-space ROI support for dwi-tracts — feasibility &amp; plan</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --ink:#e6e8ee; --muted:#9aa3b2;
+    --accent:#4da3ff; --accent2:#7ee787; --warn:#ffbf69; --danger:#ff6b6b;
+    --code:#0b0d11; --border:#252a33;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 96px;}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px;}
+  h2{font-size:22px;margin:44px 0 12px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+  h3{font-size:18px;margin:28px 0 8px;color:var(--accent);}
+  p{margin:10px 0;}
+  code{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:13.5px;
+       background:#20242d;padding:1px 5px;border-radius:4px;color:#d7dbe4;}
+  pre{background:var(--code);border:1px solid var(--border);border-radius:8px;
+      padding:14px 16px;overflow:auto;font-size:13px;line-height:1.5;}
+  pre code{background:none;padding:0;color:#d7dbe4;}
+  .sub{color:var(--muted);font-size:15px;margin-top:0}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:2px 20px 16px;margin:16px 0;}
+  .tag{display:inline-block;font-size:12px;font-weight:600;padding:2px 9px;border-radius:20px;vertical-align:middle;}
+  .tag.tpl{background:rgba(77,163,255,.15);color:var(--accent);border:1px solid rgba(77,163,255,.4);}
+  .tag.nat{background:rgba(126,231,135,.13);color:var(--accent2);border:1px solid rgba(126,231,135,.4);}
+  .callout{border-left:4px solid var(--accent);background:#141b26;padding:12px 16px;border-radius:0 8px 8px 0;margin:16px 0;}
+  .callout.good{border-color:var(--accent2);background:#122016;}
+  .callout.warn{border-color:var(--warn);background:#221d12;}
+  .callout.danger{border-color:var(--danger);background:#231414;}
+  .callout b{color:#fff;}
+  table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14px;}
+  th,td{border:1px solid var(--border);padding:8px 10px;text-align:left;vertical-align:top;}
+  th{background:#1d2129;color:#fff;}
+  td code{font-size:12.5px;}
+  .files code{color:var(--accent2);}
+  .flow{font-family:"SF Mono",ui-monospace,Menlo,monospace;font-size:12.5px;white-space:pre;
+        background:var(--code);border:1px solid var(--border);border-radius:8px;padding:16px;overflow:auto;color:#cfd6e2;}
+  .add{color:var(--accent2);}
+  .del{color:var(--danger);}
+  .cmt{color:#6b7385;}
+  ul{margin:8px 0 8px 2px;padding-left:22px;}
+  li{margin:5px 0;}
+  .kbd{font-size:12px;color:var(--muted);}
+  .legend span{margin-right:18px;}
+  hr{border:none;border-top:1px solid var(--border);margin:36px 0;}
+  .toc a{color:var(--accent);text-decoration:none;}
+  .toc a:hover{text-decoration:underline;}
+  .small{font-size:13px;color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Native-space ROI support for <code>dwi-tracts</code></h1>
+<p class="sub">Feasibility assessment &amp; implementation plan — tract-tracing from a template-space LC mask to individual ASHS segmentations (BA35 / CA1–3), with attention to the downstream TSA pipeline.</p>
+
+<div class="panel toc">
+<h3 style="margin-top:14px">Contents</h3>
+<ul>
+  <li><a href="#tldr">1. Bottom line</a></li>
+  <li><a href="#spaces">2. How the pipeline uses coordinate spaces today</a></li>
+  <li><a href="#invariants">3. The two invariants the downstream depends on</a></li>
+  <li><a href="#impact">4. Impact on the consensus-tract → subject-space TSA step</a></li>
+  <li><a href="#options">5. Two ways to introduce native ROIs (and which to pick)</a></li>
+  <li><a href="#changes">6. Concrete changes, file by file</a></li>
+  <li><a href="#risks">7. Risks, edge cases &amp; validation</a></li>
+</ul>
+</div>
+
+<h2 id="tldr">1. Bottom line</h2>
+
+<div class="callout good">
+<p><b>The change is feasible and — done the recommended way — requires <em>no functional change to the downstream TSA analysis at all.</em></b></p>
+<p>The deformation of the consensus tract into subject space (<code>process_tsa_subject</code>) depends only on the subject's diffusion↔template warp (<code>reg3G</code>), which is completely independent of where an ROI was originally defined. As long as each subject's <code>probtrackx</code> path-density output lands on the shared template grid — exactly as it does now — the group averaging, consensus-tract estimation, and TSA regression are unaffected.</p>
+</div>
+
+<p>The trick is to <b>resolve "native" into the template grid at the pre-processing (probtrackx) stage</b>, per subject, rather than pushing native space downstream. The subject-specific ASHS label is warped into template space and used as the seed/target mask; the individualisation you want (subject-true BA35 / hippocampal anatomy) is fully preserved, but the pipeline keeps a single common grid end-to-end.</p>
+
+<p>The bulk of the new work is therefore where you already expected it: <b>pre-processing</b> — a per-subject registration chain from ASHS (T2 hires slab) into the <code>Mean3G</code> template, plus a small JSON-schema extension and a group-consensus ROI builder. The analysis package <code>dwitracts/</code> needs only trivial, optional edits.</p>
+
+<h2 id="spaces">2. How the pipeline uses coordinate spaces today</h2>
+
+<p>There are exactly two spaces in play, and they meet in one place.</p>
+
+<div class="legend small"><span><span class="tag tpl">TEMPLATE</span> = study template <code>Mean3G</code> (a.k.a. "standard"/"mni" in the code)</span><span><span class="tag nat">NATIVE</span> = a single subject's diffusion (FA/DWI) space</span></div>
+
+<div class="flow">
+<span class="tag tpl">TEMPLATE</span>  ROI masks in <code>data/rois/mtl-fix/*.nii.gz</code>  (LC_L, Ent_L, …)
+        │
+        │  probtrackx  (run_probtrackx.py)
+        │    -x SEED           seed mask defines the OUTPUT reference space
+        │    --xfm   Mean3G_warp2FA     template → native  (applied to masks internally)
+        │    --invxfm FA_warp2Mean3G    native  → template
+        │    --os2t --otargetpaths
+        ▼
+<span class="tag tpl">TEMPLATE</span>  per-subject  probtrackX/&lt;net&gt;/&lt;seed&gt;/target_paths_&lt;target&gt;.nii.gz
+        │        (every subject on the SAME grid — no --seedref, so seed grid wins)
+        │
+        │  dwitracts.main  (group level — ALL of this is template space)
+        │    compute_bidirectional_averages   ← sums target_paths across subjects
+        │    compute_tract_distances          ← reads rois_dir masks for seed distance
+        │    estimate_(uni|bi)directional_tracts, gaussians, polylines
+        │    compute_average_orientations     → avrdir_&lt;tract&gt;.nii.gz
+        ▼
+<span class="tag tpl">TEMPLATE</span>  consensus tract  final/tract_final_bidir_&lt;tract&gt;.nii.gz
+        │        + orientation field  avrdir/avrdir_&lt;tract&gt;.nii.gz
+        │
+        │  process_tsa_subject()   ── per subject ──
+        │    vecreg / applywarp  -w reg3G/Mean3G_warp2FA        (TEMPLATE → NATIVE)
+        ▼
+<span class="tag nat">NATIVE</span>    consensus tract + orientations resampled into subject DWI space
+        │        → per-voxel OLS regression against raw DWI  (the TSA betas)
+        │    applywarp  -w reg3G/FA_warp2Mean3G                 (NATIVE → TEMPLATE)
+        ▼
+<span class="tag tpl">TEMPLATE</span>  &lt;stat&gt;_mni_&lt;tract&gt;.nii.gz   → smoothed, masked → GLM
+</div>
+
+<p>Key source anchors:</p>
+<ul class="files">
+  <li><code>preprocess/run_probtrackx.py</code> — builds the <code>probtrackx2</code> command; seed is <code>-x {rois_dir}/{seed}.nii.gz</code>, and <code>--xfm/--invxfm</code> are the subject <code>reg3G</code> warps (lines ~113–125, 190–191).</li>
+  <li><code>dwitracts/main.py:103</code> — <code>initialize()</code> loads <code>rois[0]</code> to fix <code>self.V_img</code>, <b>the reference affine/grid for every group volume.</b></li>
+  <li><code>dwitracts/main.py:237</code> — <code>compute_bidirectional_averages</code> <b>sums <code>target_paths</code> across subjects with one shared affine</b> — this is only valid because they are all on the template grid.</li>
+  <li><code>dwitracts/main.py:347</code> — <code>compute_tract_distances</code> loads each <code>rois_dir/{roi}</code> mask onto <code>self.V_img.affine</code> and uses it as the flood-fill seed for step-distance ordering.</li>
+  <li><code>dwitracts/main.py:1370–1371, 1452–1473, 1604–1605</code> — <code>process_tsa_subject</code>: the <b>only</b> place native subject space appears, driven purely by <code>reg3G</code> warps.</li>
+</ul>
+
+<h2 id="invariants">3. The two invariants the downstream depends on</h2>
+
+<p>The entire group + TSA stack is agnostic to an ROI's <em>origin</em>. It only requires:</p>
+
+<div class="callout">
+<p><b>Invariant A — one shared grid.</b> Every subject's <code>target_paths_&lt;target&gt;.nii.gz</code> must sit on the identical template voxel grid (so they can be summed voxel-wise in <code>compute_bidirectional_averages</code>).</p>
+</div>
+<div class="callout">
+<p><b>Invariant B — one template ROI file per ROI.</b> A single <code>rois_dir/&lt;roi&gt;.nii.gz</code> on that same grid must exist, because <code>initialize()</code> uses one to define the reference affine and <code>compute_tract_distances</code>/<code>estimate_*</code> use each as the distance seed.</p>
+</div>
+
+<p><b>Neither invariant knows or cares whether an ROI was drawn in MNI or came from a subject's ASHS segmentation.</b> This is the crux of the feasibility answer: satisfy A and B, and the consensus-tract-into-subject-space machinery is untouched.</p>
+
+<h2 id="impact">4. Impact on the consensus-tract → subject-space TSA step</h2>
+
+<p>Your specific worry — "the downstream analysis of tract-specific anisotropy requires deforming a consensus tract into subject space" — resolves cleanly:</p>
+
+<ul>
+  <li>The consensus tract is built <b>in template space</b> from the path densities, then warped to each subject with <code>reg3G/Mean3G_warp2FA</code>. That warp is a <b>diffusion↔template</b> registration produced by bedpostx pre-processing; it has nothing to do with the ROIs. Whether BA35 was an MNI blob or a subject-specific ASHS label, the consensus tract is still a template-space image and still warps by the same subject field.</li>
+  <li><code>process_tsa_subject</code> never opens an ROI file. It consumes <code>tract_final_bidir_*</code> and <code>avrdir_*</code> only. So it is <b>entirely insensitive</b> to this change.</li>
+  <li>The one thing that <em>does</em> change is the <b>anatomy of the consensus tract itself</b>: tracts will now terminate at subject-true transentorhinal / hippocampal locations (warped to the template) instead of a one-size MNI ROI. That is the scientific improvement you want, and it flows through automatically — no code path special-cases it.</li>
+</ul>
+
+<div class="callout good"><p><b>Conclusion:</b> the downstream TSA deformation is safe. The change lives almost entirely upstream of it.</p></div>
+
+<h2 id="options">5. Two ways to introduce native ROIs</h2>
+
+<table>
+<tr><th style="width:50%">Option A — resolve to template at probtrackx <span class="tag nat">recommended</span></th><th>Option B — run probtrackx natively</th></tr>
+<tr>
+<td>Per subject, warp the ASHS label into <code>Mean3G</code> space and use it as the seed/target mask. <code>--xfm/--invxfm</code> unchanged; outputs stay on the template grid.</td>
+<td>Warp LC into native space, keep ASHS native, run probtrackx with no <code>--xfm</code>. Outputs come out in <em>native</em> space.</td>
+</tr>
+<tr>
+<td class="add"><b>Invariant A/B preserved. Zero downstream change.</b> Subject-specificity preserved (mask is the subject's own anatomy, merely re-gridded).</td>
+<td class="del"><b>Breaks Invariant A:</b> every subject's <code>target_paths</code> is on a different grid, so <code>compute_bidirectional_averages</code> can no longer sum them. You'd have to add a per-subject warp-to-template step inside the group loop.</td>
+</tr>
+<tr>
+<td>Extra cost: one <code>applywarp</code> per native ROI per subject at prep time.</td>
+<td>More invasive; touches the analysis package; more moving parts.</td>
+</tr>
+</table>
+
+<p><b>Recommendation: Option A.</b> It keeps a single common grid, leaves <code>dwitracts/</code> essentially untouched, and still gives you individualised termination regions. The rest of this plan assumes Option A.</p>
+
+<h2 id="changes">6. Concrete changes, file by file</h2>
+
+<h3>6.1 &nbsp;JSON schema — declare per-ROI space</h3>
+<p>Today seeds/targets/exclusion are plain string lists (<code>project/LC-MTL.json</code>). Extend backward-compatibly: a bare string keeps meaning <span class="tag tpl">TEMPLATE</span>; an object opts into <span class="tag nat">NATIVE</span> and carries the ASHS lookup.</p>
+
+<p class="small"><b>Before</b> — <code>project/LC-MTL.json</code></p>
+<pre><code>{
+  "networks": [
+    {
+      "seeds":     ["LC_L"],
+      "targets":   ["Ent_L", "PirTB_L", "PirT_L"],
+      "exclusion": ["LC_Stop","csf","zPlane_86"]
+    }
+  ]
+}</code></pre>
+
+<p class="small"><b>After</b> — LC stays template; transentorhinal target becomes the subject's ASHS BA35</p>
+<pre><code>{
+  "networks": [
+    {
+      "seeds":     ["LC_L"],                          <span class="cmt">// string → space:"template" (default)</span>
+      "targets": [
+        { "roi": "BA35_L", "space": "native",         <span class="cmt">// subject ASHS label</span>
+          "ashs_side": "left", "ashs_labels": [11] }, <span class="cmt">// 11 = BA35 (transentorhinal)</span>
+        "PirTB_L", "PirT_L"                           <span class="cmt">// still template</span>
+      ],
+      "exclusion": ["LC_Stop","csf","zPlane_86"]
+    }
+  ]
+}</code></pre>
+
+<p>For the limbic follow-on, the anterior hippocampus target is CA1/CA2/CA3 with an optional anterior restriction:</p>
+<pre><code>{ "roi": "antHC_L", "space": "native", "ashs_side": "left",
+  "ashs_labels": [1, 2, 4],          <span class="cmt">// CA1=1, CA2=2, CA3=4  (DG=3 optional)</span>
+  "anterior_fraction": 0.5 }         <span class="cmt">// optional: keep anterior half of the slab</span></code></pre>
+
+<p class="small">ASHS label numbers verified against a subject seg and the columns of <code>ashs_dataframe.csv</code>: <code>1 CA1 · 2 CA2 · 3 DG · 4 CA3 · 8 SUB · 10 ERC · 11 BA35 · 12 BA36 · 13 PHC</code>.</p>
+
+<h3>6.2 &nbsp;<code>preprocess/run_probtrackx.py</code> — resolve ROI paths per subject</h3>
+<p>Currently every mask path is hard-wired as <code>{rois_dir}/{name}.nii.gz</code> (see <code>run_probtrackx_for_seed</code>). Introduce a resolver so a network entry can be a string <em>or</em> a native-ROI object, and normalise the entry lists up front.</p>
+
+<pre><code><span class="add">def roi_name(entry):</span>
+<span class="add">    """A network entry is either 'ROIName' or {'roi': 'ROIName', ...}."""</span>
+<span class="add">    return entry['roi'] if isinstance(entry, dict) else entry</span>
+
+<span class="add">def roi_space(entry):</span>
+<span class="add">    return entry.get('space', 'template') if isinstance(entry, dict) else 'template'</span>
+
+<span class="add">def resolve_roi_path(entry, subject, rois_dir, subj_native_roi_dir,</span>
+<span class="add">                     config_gen, fsl_bin):</span>
+<span class="add">    """Return a TEMPLATE-grid mask path for this ROI, generating a subject-</span>
+<span class="add">    specific one from ASHS if space == 'native'. Guarantees Invariant A."""</span>
+<span class="add">    name = roi_name(entry)</span>
+<span class="add">    if roi_space(entry) == 'template':</span>
+<span class="add">        return '{0}/{1}.nii.gz'.format(rois_dir, name)          # unchanged path</span>
+<span class="add"></span>
+<span class="add">    # --- native (ASHS) ROI -------------------------------------------------</span>
+<span class="add">    out = '{0}/{1}.nii.gz'.format(subj_native_roi_dir, name)</span>
+<span class="add">    if os.path.isfile(out) and not config_gen['clobber']:</span>
+<span class="add">        return out</span>
+<span class="add">    make_native_roi_in_template(</span>
+<span class="add">        subject      = subject,</span>
+<span class="add">        side         = entry['ashs_side'],</span>
+<span class="add">        labels       = entry['ashs_labels'],</span>
+<span class="add">        anterior_fr  = entry.get('anterior_fraction', None),</span>
+<span class="add">        out_path     = out,          # resampled onto the Mean3G reference grid</span>
+<span class="add">        config_gen   = config_gen, fsl_bin = fsl_bin)</span>
+<span class="add">    return out</span></code></pre>
+
+<p>Then <code>run_probtrackx_for_seed</code> takes <em>resolved paths</em> instead of building them from names. The only edits are the three places that interpolate <code>{rois_dir}/{name}.nii.gz</code>:</p>
+
+<pre><code>def run_probtrackx_for_seed(seed_path, target_paths, exclusion, net_dir, ...):
+    <span class="del">- roi_file = '{0}/{1}.nii.gz'.format(rois_dir, seed)</span>
+    <span class="add">+ roi_file = seed_path                      # already resolved (tpl or native)</span>
+      ...
+      with open(roi_list, 'w') as listout:
+    <span class="del">-     for target in targets:</span>
+    <span class="del">-         mask_path = '{0}/{1}.nii.gz'.format(rois_dir, target)</span>
+    <span class="add">+     for mask_path in target_paths:         # already resolved</span>
+              listout.write('{0}\n'.format(mask_path))
+              target_mask_paths.append(mask_path)</code></pre>
+
+<p>And the per-network driver in <code>probtrackx_subject</code> resolves once per subject (the seed name for output-dir layout is taken from <code>roi_name()</code> so the <code>&lt;seed&gt;/target_paths_&lt;target&gt;.nii.gz</code> layout that the downstream expects is unchanged):</p>
+
+<pre><code>subj_native_roi_dir = '{0}/native_rois/{1}'.format(subj_dir, config_ptx['network_name'])
+os.makedirs(subj_native_roi_dir, exist_ok=True)
+
+for seed in seeds:
+    seed_path   = resolve_roi_path(seed, subject, rois_dir, subj_native_roi_dir, ...)
+    tgt_paths   = [resolve_roi_path(t, subject, rois_dir, subj_native_roi_dir, ...)
+                   for t in targets]
+    ok = run_probtrackx_for_seed(seed_path, tgt_paths, exclusion, net_dir,
+                                 roi_name(seed), bedpostx_dir, xfm_img, invxfm_img, ...)</code></pre>
+
+<div class="callout warn"><p><b>Critical detail for Invariant A:</b> <code>make_native_roi_in_template</code> must resample onto the <em>exact</em> <code>Mean3G</code> reference grid (<code>applywarp -r utils/Mean3G</code>), so every subject's native ROI — and therefore every <code>target_paths</code> output — shares one affine. Do not let it inherit the ASHS 0.39×0.39×2&nbsp;mm grid.</p></div>
+
+<h3>6.3 &nbsp;New helper — ASHS label → template mask</h3>
+<p>ASHS segmentations live at <code>derived/&lt;PTID_DATE&gt;/ashs/final/ashs_&lt;side&gt;_lfseg_corr_usegray.nii.gz</code> in a T2 hires slab (verified: 448×448×30, oblique coronal). The registration chain is the genuinely new pre-processing piece:</p>
+
+<pre><code><span class="cmt"># conceptual — the registration chain to build ONE native ROI on the Mean3G grid</span>
+<span class="add">def make_native_roi_in_template(subject, side, labels, anterior_fr, out_path, ...):</span>
+<span class="add">    seg = ashs_seg_path(subject, side)                 # ASHS T2-slab segmentation</span>
+<span class="add">    # 1. binarise the requested label(s) in ASHS space</span>
+<span class="add">    run_fsl('fslmaths {seg} -thr {lo} -uthr {hi} -bin {tmp}'...)   # per label, then -add</span>
+<span class="add">    # 2. optional anterior restriction (keep anterior fraction of populated slices)</span>
+<span class="add">    # 3. ASHS(T2) -> DWI/Mean3G.  Reuse an existing transform if the study already</span>
+<span class="add">    #    registers the T2 hires slab or the T1 to diffusion; otherwise:</span>
+<span class="add">    #       ASHS-T2  --(rigid, ashs mprage)-->  T1</span>
+<span class="add">    #       T1       --(epi_reg / existing)  -->  DWI (native)</span>
+<span class="add">    #       DWI      --(reg3G FA_warp2Mean3G) -->  Mean3G  (TEMPLATE)</span>
+<span class="add">    # 4. applywarp -r utils/Mean3G  --interp=nn  -> out_path  (Invariant A)</span>
+<span class="add">    #    fslmaths out_path -bin out_path</span></code></pre>
+
+<div class="callout"><p>You flagged the tracing pre-processing as "trivial" — this chain is where the real effort sits, but it is standard registration plumbing and, importantly, <b>self-contained</b>: nothing downstream needs to know it happened. If ASHS→diffusion registration already exists in the ADNI pipeline, this collapses to a single <code>applywarp</code>.</p></div>
+
+<h3>6.4 &nbsp;New script — build the group-consensus template ROI (Invariant B)</h3>
+<p><code>dwitracts</code> still needs <em>one</em> <code>rois_dir/&lt;roi&gt;.nii.gz</code> per native ROI (for the reference affine and the flood-fill distance seed). Build it once by averaging the per-subject warped native masks:</p>
+
+<pre><code><span class="cmt"># preprocess/build_native_roi_group.py  (run once, after native ROIs are generated)</span>
+<span class="add">acc = None</span>
+<span class="add">for subject in subjects:</span>
+<span class="add">    v = nib.load(f'{deriv}/{subject}/dwi/native_rois/{net}/{roi}.nii.gz').get_fdata()</span>
+<span class="add">    acc = v if acc is None else acc + v</span>
+<span class="add">prob = acc / len(subjects)                       # voxel-wise inclusion frequency</span>
+<span class="add">mask = (prob &gt;= 0.30).astype(np.float32)          # e.g. present in ≥30% of subjects</span>
+<span class="add">nib.save(nib.Nifti1Image(mask, ref.affine, ref.header),</span>
+<span class="add">         f'{rois_dir}/{roi}.nii.gz')              # satisfies Invariant B</span></code></pre>
+
+<p class="small">This consensus mask is used only for grid definition and distance ordering, not for the actual per-subject targeting (which uses the subject-specific mask). A generous threshold is fine.</p>
+
+<h3>6.5 &nbsp;<code>dwitracts/main.py</code> — what changes here</h3>
+<div class="callout good">
+<p><b>Functionally: nothing.</b> With Invariants A &amp; B satisfied, <code>initialize</code>, <code>compute_bidirectional_averages</code>, <code>compute_tract_distances</code>, the tract estimators, <code>compute_average_orientations</code>, <code>compute_tsa</code>, and <code>process_tsa_subject</code> all keep working unchanged.</p>
+</div>
+<p>Optional, low-risk niceties:</p>
+<ul>
+  <li>Add the native ROI names to <code>project/lc-limbic.rois</code> / <code>lc.rois</code> and <code>*.pairs</code> so the group loops include them (these are just name lists — <code>Ent_L</code> today simply becomes <code>BA35_L</code>, etc.).</li>
+  <li>Optionally record provenance (which ROIs were native) into the tract log dir for reproducibility. Not required for correctness.</li>
+</ul>
+
+<h3>6.6 &nbsp;Config additions</h3>
+<p>In <code>config_preprocess_*.json</code> under <code>probtrackx</code> (or a new <code>native_rois</code> block), point at ASHS and the registration references:</p>
+<pre><code>"native_rois": {
+  "ashs_root":   "/share/ConnLS/ADNI/derived",
+  "ashs_seg":    "ashs/final/ashs_{side}_lfseg_corr_usegray.nii.gz",
+  "template_ref":"utils/Mean3G.nii.gz",
+  "group_thresh": 0.30
+}</code></pre>
+
+<h2 id="risks">7. Risks, edge cases &amp; validation</h2>
+<table>
+<tr><th>Concern</th><th>Handling</th></tr>
+<tr><td>Grid drift — a native ROI resampled onto a slightly different affine</td><td>Always <code>applywarp -r utils/Mean3G</code>; assert the output affine equals <code>self.V_img.affine</code> in the group builder. This is the one thing that would silently corrupt <code>compute_bidirectional_averages</code>.</td></tr>
+<tr><td>Missing / failed ASHS for some subjects</td><td>Resolver returns <code>None</code> → skip that subject for that network (mirrors the existing <code>try/except</code> in <code>compute_bidirectional_averages</code>). Log to the tract <code>log</code> dir.</td></tr>
+<tr><td>Reverse-direction tracking uses the native ROI as a <em>seed</em></td><td>Fine — the warped-to-template mask is a normal template-grid seed; output space still template. No special case.</td></tr>
+<tr><td>Empty mask after label extraction / anterior crop</td><td>Validate voxel count &gt; 0 before writing; fail loudly at prep time, not silently at group time.</td></tr>
+<tr><td>ASHS T2 slab is a thin coronal slab (2&nbsp;mm, limited FOV)</td><td>BA35 &amp; anterior hippocampus are inside the slab, so targeting is fine; just confirm the anterior-restriction logic uses slab geometry, not template Y.</td></tr>
+</table>
+
+<h3>Suggested validation sequence</h3>
+<ul>
+  <li>Pick 2–3 subjects; generate their native BA35 in template space; overlay on <code>Mean3G</code> and on the old MNI <code>Ent_L</code> — confirm anatomical plausibility.</li>
+  <li>Run probtrackx for those subjects; confirm <code>target_paths_*.nii.gz</code> have the <b>same affine/shape</b> as a template ROI (<code>fslinfo</code> diff).</li>
+  <li>Run the group steps on the small set; confirm <code>compute_bidirectional_averages</code> produces a sane consensus tract and that <code>process_tsa_subject</code> completes with no new failures.</li>
+</ul>
+
+<hr>
+<p class="small">Generated for review. No code has been modified — this is a plan only. Source inspected: <code>preprocess/run_probtrackx.py</code>, <code>dwitracts/main.py</code>, <code>compute_tsa.py</code>, <code>compute_tract_metrics.py</code>, <code>run_single_subject_tsa.py</code>, project configs, and a sample ASHS segmentation.</p>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,1 @@
+while read -r x; do sbatch probtrackx_job.sh "$x" "/gpfs01/home/lpxjr4/dwi-tracts/project/config_preprocess.json"; done < ~/adni/127bvals.list
