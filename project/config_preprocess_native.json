@@ -10,7 +10,7 @@
     "flags_dir":         "flags",
     "prefix":            "",
     "session":           "",
-    "subjects_file":     "/share/ConnLS/ADNI/subject-dwi-sessions.list",
+    "subjects_file":     "/share/ConnLS/ADNI/dwi-tracts/project/test_subjects_20.list",
     "clobber":           true,
     "dryrun":            false,
     "verbose":           true,
