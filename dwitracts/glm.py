@@ -1,6 +1,7 @@
 import os
 import csv
 import json
+import gc
 import pandas as pd
 import copy
 import numpy as np
@@ -601,7 +602,9 @@ class DwiTractsGlm:
 
                     if verbose:
                         print('   Done {0}'.format(glm) )
-        
+                    del V_resids
+                    gc.collect()
+
         return True
 
     
