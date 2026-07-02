@@ -1,19 +1,40 @@
 
-data/nki/.DS_Store
-data/.DS_Store
-data/nki/deriv/sub-A00013809/.DS_Store
-data/nki/deriv/sub-A00013809/ses-DS2/.DS_Store
-data/nki/deriv/sub-A00013809/ses-DS2/dwi/.DS_Store
-.ipynb_checkpoints/
+# macOS
 .DS_Store
-dwitracts/__pycache__/__init__.cpython-36.pyc
-dwitracts/__pycache__/__init__.cpython-37.pyc
-dwitracts/__pycache__/glm.cpython-36.pyc
-dwitracts/__pycache__/glm.cpython-37.pyc
-dwitracts/__pycache__/main.cpython-36.pyc
-dwitracts/__pycache__/main.cpython-37.pyc
-dwitracts/__pycache__/pff.cpython-37.pyc
-dwitracts/__pycache__/plot.cpython-36.pyc
-dwitracts/__pycache__/plot.cpython-37.pyc
-dwitracts/__pycache__/utils.cpython-36.pyc
-dwitracts/__pycache__/utils.cpython-37.pyc
+data/**/.DS_Store
+data/nki/.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.swp
+
+# Jupyter
+.ipynb_checkpoints/
+
+# SLURM / LSF job output
+*.out
+*.err
+nohup.out
+slurm-*.out
+logs/
+preprocess/logs/
+
+# Temporary files
+tmp/
+*.old
+
+# NIfTI data and zips that aren't ROIs committed intentionally
+data/rois/mtl-hi/
+data/rois/mtl/
+data/rois/mtl.zip
+
+# Diagnosis / scratch output
+diag_dist/
+
+# rft1d library (external dependency, not ours)
+rft1d/
+
+# Probtrackx GPU binary directory
+preprocess/bedpostx_gpu/
