@@ -1,0 +1,40 @@
+{
+    "networks": [
+      {
+        "name": "Ent_L-ofc",
+        "seeds": ["Ent_L"],
+        "targets": ["ofc_lh"],
+        "exclusion": ["csf", "zPlane_86", "Ent_L_inferior_edge"]
+      },
+      {
+        "name": "Ent_L-acc",
+        "seeds": ["Ent_L"],
+        "targets": ["area33_acc_lh"],
+        "exclusion": ["csf", "Ent_L_inferior_edge", "uf_stop_lh"]
+      },
+      {
+        "name": "Ent_L-hypothal",
+        "seeds": ["Ent_L"],
+        "targets": ["hypothal_lh"],
+        "exclusion": ["Ent_L_inferior_edge", "thalamus_inner_stop_lh", "hypothal_lateral_stop_lh"]
+      },
+      {
+        "name": "Ent_R-ofc",
+        "seeds": ["Ent_R"],
+        "targets": ["ofc_rh"],
+        "exclusion": ["csf", "zPlane_86", "Ent_R_inferior_edge"]
+      },
+      {
+        "name": "Ent_R-acc",
+        "seeds": ["Ent_R"],
+        "targets": ["area33_acc_rh"],
+        "exclusion": ["csf", "Ent_R_inferior_edge", "uf_stop_rh"]
+      },
+      {
+        "name": "Ent_R-hypothal",
+        "seeds": ["Ent_R"],
+        "targets": ["hypothal_rh"],
+        "exclusion": ["Ent_R_inferior_edge", "thalamus_inner_stop_rh", "hypothal_lateral_stop_rh"]
+      }
+    ]
+  }

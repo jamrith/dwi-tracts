@@ -1,0 +1,90 @@
+{
+"general":
+   {
+   "source_dir":      "/share/ConnLS/ADNI/dwi-tracts",
+   "project_dir":     "/share/ConnLS/ADNI",
+   "deriv_dir":       "derived",
+   "prefix":          "",
+   "sub_dirs":        "",
+   "rois_dir":        "data/rois/mtl-fix",
+   "rois_list":       "project/lc-limbic-hypothal.rois",
+   "roi_pairs":       "project/lc-limbic-hypothal.pairs",
+   "network_name":    "LC-limbic",
+   "subjects_file":   "project/test_subjects_19.list",
+   "dir_format":      "subject_first",
+   "dwi_dir":         "dwi",
+   "tracts_dir":      "tract_stats",
+   "output_dir":      "tracts",
+   "temp_dir":        "/share/ConnLS/ADNI/dwi-tracts/tmp/dwi",
+   "preproc_config":  "project/config_preprocess_limbic.json",
+   "clobber":          true,
+   "verbose":          true,
+   "debug":            true
+   },
+"average_tracts":
+   {
+   "fwhm":             3.5,
+   "bin_thres":        0.0
+   },
+"gaussians":
+   {
+   "avr_type":         "bin",
+   "threshold":        0.07,
+   "fwhm_axial":       8,
+   "fwhm_radial":      4,
+   "gauss_max_radius": 8,
+   "max_seg_length":   10,
+   "max_seg_angle":    0.33333,
+   "tract_thresh":     10E-6,
+   "fail_constraints": false,
+   "seed_dilate":      3,
+   "mask_dilate":      true
+   },
+"average_directions":
+   {
+   "force_compute":    true,
+   "threshold":        0.1,
+   "use_normalized":   true
+   },
+"tract_metrics":
+   {
+   "threshold":        0.2,
+   "weighted_avr":     true,
+   "metric":           "FA",
+   "xfm":              true,
+   "force_compute":    false,
+   "weighted":         true
+   },
+"dwi_regressions":
+   {
+   "fsl_root":         "/software/imaging/fsl/6.0.6.3/",
+   "force_compute":    true,
+   "force_regress":    true,
+   "use_normalized":   true,
+   "covariates_file":  "project/covariates_basic.csv",
+   "threshold":        0.0,
+   "regress_dir":      "regress_dwi",
+   "beta_min":         -1,
+   "beta_max":         1,
+   "beta_norm":        false,
+   "write_stats":      false,
+   "retain_dwi":       false,
+   "beta_sm_fwhm":     1.5,
+   "fa_img":           "dti_FA",
+   "standard_img":     "Mean3G",
+   "mask":             "Mean3G",
+   "fail_on_error":    true,
+   "ignore_errors":    true,
+   "qsub_config":
+      {
+      "use_qsub":       false,
+      "walltime":       "10:00:00",
+      "select":         1,
+      "ncpus":          1,
+      "mem":            "4gb",
+      "project_id":     "",
+      "temp_dir":       "tmp",
+      "output_dir":     "covariates"
+      }
+   }
+}

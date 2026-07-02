@@ -1,0 +1,16 @@
+{
+    "networks": [
+      {
+        "name": "Ent_L-hypothal",
+        "seeds": ["Ent_L"],
+        "targets": ["hypothal_lh"],
+        "exclusion": ["Ent_L_inferior_edge", "thalamus_inner_stop_lh", "hypothal_lateral_stop_lh"]
+      },
+      {
+        "name": "Ent_R-hypothal",
+        "seeds": ["Ent_R"],
+        "targets": ["hypothal_rh"],
+        "exclusion": ["Ent_R_inferior_edge", "thalamus_inner_stop_rh", "hypothal_lateral_stop_rh"]
+      }
+    ]
+  }

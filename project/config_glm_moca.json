@@ -1,0 +1,76 @@
+{
+"general":
+   {
+    "preproc_config_file":   "project/config_preprocess.json",
+    "tracts_config_file":    "project/config_tracts_lc.json",
+    "covariates_file":       "project/covariates_moca.csv",
+    "subjects_file":         "project/unique_glm_subjects_moca.list",
+    "standardized_beta":     false,
+    "glm_output_dir":        "glms",
+    "tract_threshold":       0.4,
+    "snet_output_dir":       "snet",
+    "summary_metric":        "max",
+    "min_clust":             3,
+    "fdr_alpha":             0.05,
+    "fdr_method":            "fdr_tsbky",
+    "nan_value":             0,
+    "clobber":               false,
+    "dryrun":                false,
+    "verbose":               true
+   },
+"glm":
+   {
+   "glm-moca":
+      {
+      "factors":
+            [
+            "AGE",
+            "FEMALE",
+            "MOCA"
+            ],
+      "categorical":
+            {
+            "AGE":    false,
+            "FEMALE": true,
+            "MOCA":   false
+            },
+      "levels": {
+            "FEMALE":
+                {
+                 "Male": "0",
+                 "Female": "1"
+                }
+            },
+      "intercept":          true,
+      "outlier_z":          3.5
+      }
+   },
+"traces":
+    {
+    "tract_threshold":       0.5,
+    "cluster_alpha":         0.01,
+    "fdr_method":            "fdr_tsbky",
+    "fdr_alpha":             0.05,
+    "pval_alpha":            0.05,
+    "plot_permutations":     true,
+    "n_permutations":        5000,
+    "max_weight_factor":     1
+    },
+"space-net":
+   {
+    "eps":                   1e-1,
+    "memory":                "nilearn_cache",
+    "penalty":               "graph-net",
+    "cv":                    3
+   },
+"plots":
+    {
+     "chord":
+        {
+         "show_title":       false,
+         "colormap":         "viridis",
+         "replace_text":     "",
+         "min_tcount":       2
+        }
+    }
+}

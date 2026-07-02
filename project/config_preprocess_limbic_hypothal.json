@@ -1,0 +1,59 @@
+{
+"general":
+    {
+    "fsl_bin":           "",
+    "root_dir":          "/share/ConnLS/ADNI",
+    "raw_dir":           "converted",
+    "deriv_dir":         "derived",
+    "convert_dir":       "converted",
+    "dir_format":        "subject_first",
+    "flags_dir":         "flags",
+    "prefix":            "",
+    "session":           "",
+    "subjects_file":     "/share/ConnLS/ADNI/subject-dwi-sessions.list",
+    "clobber":           false,
+    "dryrun":            false,
+    "verbose":           true,
+    "temp_dir":          "/tmp/"
+    },
+"bedpostx":
+    {
+    "dwi_suffix":        "_dwi",
+    "anat_suffix":       "_T1w",
+    "bval_suffix":       "bval",
+    "bvec_suffix":       "bvec",
+    "eddy_suffix":       "eddy",
+    "eddy_reference":     0,
+    "bet_suffix":        "bet",
+    "mni_suffix":        "space-MNI152lin",
+    "mni_ref":           "MNI152_${T1}_2mm",
+    "mean3g_ref":        "Mean3G.nii.gz",
+    "mean3g_mask":       "Mask.nii.gz",
+    "mean3g_config":     "G3_FAnormalization.cnf",
+    "job_script":        "bedpostx_gpu_job.sh",
+    "preproc_script":    "bedpostx_preproc_job.sh",
+    "postproc_script":   "/share/ConnLS/ADNI/dwi-tracts/preprocess/bedpostx_postproc_job.sh"
+    },
+"probtrackx":
+    {
+    "roi_dir":           "/share/ConnLS/ADNI/dwi-tracts/data/rois/mtl-fix",
+    "roi_list":          "/share/ConnLS/ADNI/dwi-tracts/project/LC-limbic-hypothal.json",
+    "network_name":      "LC-limbic",
+    "distthresh":        5.0,
+    "sampvox":           2,
+    "nsteps":            600,
+    "cthr":              0.2,
+    "steplength":        0.5,
+    "nsamples":          150000,
+    "fibthresh":         0.01,
+    "job_script":        "probtrackx_gpu_job.sh",
+    "use_gpu":           true
+    },
+"scheduler":
+    {
+    "submit":            true,
+    "command":           "sbatch",
+    "cpu_queue":         "",
+    "gpu_queue":         "imgvoltaq"
+    }
+}
