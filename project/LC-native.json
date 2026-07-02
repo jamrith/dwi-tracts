@@ -1,0 +1,73 @@
+{
+  "networks": [
+
+    {
+      "name": "LC_L-MTL",
+      "seeds": ["LC_L"],
+      "targets": [
+        {"roi": "BA35_L", "space": "native", "ashs_side": "left", "ashs_labels": [11]},
+        "PirT_L"
+      ],
+      "exclusion": ["LC_Stop", "csf", "zPlane_86"]
+    },
+
+    {
+      "name": "LC_R-MTL",
+      "seeds": ["LC_R"],
+      "targets": [
+        {"roi": "BA35_R", "space": "native", "ashs_side": "right", "ashs_labels": [11]},
+        "PirT_R"
+      ],
+      "exclusion": ["LC_Stop", "csf", "zPlane_86"]
+    },
+
+    {
+      "name": "antHC_L-ofc",
+      "seeds": [{"roi": "antHC_L", "space": "native", "ashs_side": "left",
+                 "ashs_labels": [1, 2, 4], "anterior_fraction": 0.2}],
+      "targets": ["ofc_lh"],
+      "exclusion": ["csf", "zPlane_86"]
+    },
+
+    {
+      "name": "antHC_L-acc",
+      "seeds": [{"roi": "antHC_L", "space": "native", "ashs_side": "left",
+                 "ashs_labels": [1, 2, 4], "anterior_fraction": 0.2}],
+      "targets": ["area33_acc_lh"],
+      "exclusion": ["csf", "uf_stop_lh"]
+    },
+
+    {
+      "name": "antHC_L-hypothal",
+      "seeds": [{"roi": "antHC_L", "space": "native", "ashs_side": "left",
+                 "ashs_labels": [1, 2, 4], "anterior_fraction": 0.2}],
+      "targets": ["hypothal_lh"],
+      "exclusion": ["thalamus_inner_stop_lh", "hypothal_lateral_stop_lh"]
+    },
+
+    {
+      "name": "antHC_R-ofc",
+      "seeds": [{"roi": "antHC_R", "space": "native", "ashs_side": "right",
+                 "ashs_labels": [1, 2, 4], "anterior_fraction": 0.2}],
+      "targets": ["ofc_rh"],
+      "exclusion": ["csf", "zPlane_86"]
+    },
+
+    {
+      "name": "antHC_R-acc",
+      "seeds": [{"roi": "antHC_R", "space": "native", "ashs_side": "right",
+                 "ashs_labels": [1, 2, 4], "anterior_fraction": 0.2}],
+      "targets": ["area33_acc_rh"],
+      "exclusion": ["csf", "uf_stop_rh"]
+    },
+
+    {
+      "name": "antHC_R-hypothal",
+      "seeds": [{"roi": "antHC_R", "space": "native", "ashs_side": "right",
+                 "ashs_labels": [1, 2, 4], "anterior_fraction": 0.2}],
+      "targets": ["hypothal_rh"],
+      "exclusion": ["thalamus_inner_stop_rh", "hypothal_lateral_stop_rh"]
+    }
+
+  ]
+}
