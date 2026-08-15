@@ -1,0 +1,46 @@
+{
+  "networks": [
+    {
+      "name": "LC_L-BA35medial",
+      "seeds": [
+        "LC_L"
+      ],
+      "targets": [
+        {
+          "roi": "BA35medial_L",
+          "space": "native",
+          "ashs_side": "left",
+          "ashs_labels": [
+            11
+          ]
+        }
+      ],
+      "exclusion": [
+        "LC_Stop",
+        "csf",
+        "zPlane_86"
+      ]
+    },
+    {
+      "name": "LC_R-BA35medial",
+      "seeds": [
+        "LC_R"
+      ],
+      "targets": [
+        {
+          "roi": "BA35medial_R",
+          "space": "native",
+          "ashs_side": "right",
+          "ashs_labels": [
+            11
+          ]
+        }
+      ],
+      "exclusion": [
+        "LC_Stop",
+        "csf",
+        "zPlane_86"
+      ]
+    }
+  ]
+}
