@@ -38,3 +38,9 @@ rft1d/
 
 # Probtrackx GPU binary directory
 preprocess/bedpostx_gpu/
+
+# v2 route extraction: generated QA figures/HTML (large, regenerable via
+# make_route_method_explainer.py / make_routes_3d_html*.py / etc) and the
+# per-cohort distance-map cache (regenerable via get_or_compute_dist)
+project/route_dijkstra_out/
+project/qa_diag/route_v2_dist_cache/
