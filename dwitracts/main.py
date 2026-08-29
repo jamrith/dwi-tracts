@@ -13,6 +13,21 @@ import glob
 from . import utils
 import shutil
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+N_PARALLEL_SUBJECTS = 8  # per-subject steps shell out to FSL subprocesses
+                         # (release the GIL) or do I/O-bound nibabel loads,
+                         # so threads give real parallelism here -- added
+                         # 2026-08-11 after a 555-subject serial TSA run
+                         # took long enough to make the corrupted-input
+                         # crash costly to iterate on. Started at 16, but
+                         # that OOM'd a 64g allocation: each subject's
+                         # dwi_bet.nii.gz alone is ~550MB in Python's heap
+                         # (measured directly), plus FSL subprocess
+                         # (vecreg/applywarp) memory per worker -- realistic
+                         # peak is ~3-4GB/worker, so 16 concurrent was
+                         # 48-64GB just from this step. 8 halves that.
+                         # Pair with a matching --cpus-per-task in the sbatch.
 # from tqdm import tnrange, tqdm_notebook, tqdm
 from tqdm.notebook import tqdm
 import pandas as pd
@@ -855,6 +870,7 @@ class DwiTracts:
         params_gen = self.params['general']
         params_gauss = self.params['gaussians']
         threshold = params_gauss['threshold']
+        seed_dilate = params_gauss['seed_dilate']
 
         V_rois = {}
         for roi in self.rois:
@@ -920,7 +936,11 @@ class DwiTracts:
                     nib.save(img, '{0}/tract_final_bidir_{1}.nii.gz'.format(self.final_dir, ab))
                     
                     # Create bidirectional distance volume
-                    V_dist = utils.get_tract_dist(V, V_rois[roi_a])
+                    # (dilate the seed to match compute_tract_distances/retain_adjacent_blobs -
+                    # otherwise a seed ROI that doesn't directly touch the pruned tract mask
+                    # (e.g. after blob-retention, which uses a 3-voxel adjacency dilation)
+                    # silently fails to connect and the flood-fill never leaves the seed)
+                    V_dist = utils.get_tract_dist(V, V_rois[roi_a], dilate=seed_dilate)
                     img = nib.Nifti1Image(V_dist, self.V_img.affine, self.V_img.header)
                     nib.save(img, '{0}/dist_bidir_{1}.nii.gz'.format(self.dist_dir, ab))
 
@@ -1145,18 +1165,62 @@ class DwiTracts:
             print('DwiTracts object not initialized!')
             return False
         
-        failures = []
-        
-        for subject in tqdm( self.subjects, desc='Progress' ):           
-            failure_count = process_tsa_subject( subject, self, verbose=verbose, debug=debug )
-            failures.append(failure_count)
-            
+        # Each subject reads its own DWI files and writes to its own
+        # subj_output_dir -- no shared accumulator, so this is safe to
+        # thread. Order of `failures` must match self.subjects (consumed
+        # positionally below), so results are collected via a dict keyed
+        # by subject rather than trusting completion order.
+        results = {}
+        with ThreadPoolExecutor(max_workers=N_PARALLEL_SUBJECTS) as ex:
+            futures = {ex.submit(process_tsa_subject, subject, self,
+                                  verbose=verbose, debug=debug): subject
+                       for subject in self.subjects}
+            for fut in tqdm(as_completed(futures), total=len(futures), desc='Progress'):
+                subject = futures[fut]
+                results[subject] = fut.result()
+
+        failures = [results[subject] for subject in self.subjects]
+
         df = pd.DataFrame({'Subject': self.subjects, 'Failures': failures})
         df.to_csv( '{0}/tsa_failures.csv'.format(self.tracts_dir) )
-        
+
         return True
-        
-        
+
+
+    # Compute a standard scalar DTI metric (FA, MD, or RD) along each tract,
+    # for all subjects - the same "along-the-tract" output format as
+    # compute_tsa(), consumed the same way by DwiTractsGlm.fit_glms().
+    #
+    # metric:         One of 'FA', 'MD', 'RD'
+    # verbose:        Whether to print messages to the console
+    # clobber:        Whether to overwrite existing output
+    # debug:          Whether to use debug mode (print lots to console)
+    #
+    def compute_metric( self, metric, verbose=False, clobber=False, debug=False ):
+
+        if not self.is_init:
+            print('DwiTracts object not initialized!')
+            return False
+
+        # Same isolation argument as compute_tsa: each subject only reads
+        # its own DWI files and writes to its own subj_output_dir.
+        results = {}
+        with ThreadPoolExecutor(max_workers=N_PARALLEL_SUBJECTS) as ex:
+            futures = {ex.submit(process_metric_subject, subject, self, metric,
+                                  verbose=verbose, debug=debug): subject
+                       for subject in self.subjects}
+            for fut in tqdm(as_completed(futures), total=len(futures), desc='Progress'):
+                subject = futures[fut]
+                results[subject] = fut.result()
+
+        failures = [results[subject] for subject in self.subjects]
+
+        df = pd.DataFrame({'Subject': self.subjects, 'Failures': failures})
+        df.to_csv( '{0}/{1}_failures.csv'.format(self.tracts_dir, metric.lower()) )
+
+        return True
+
+
     # Generates a mean TSA image (across subjects) for each tract
     #
     # verbose:        Whether to print messages to the console
@@ -1281,8 +1345,8 @@ def process_tsa_subject( subject, my_dwi, verbose=False, debug=False ):
 
     params_gen = my_dwi.params['general']
     tmp_dir = params_gen['temp_dir']
-    if not os.path.isdir(tmp_dir):
-        os.makedirs(tmp_dir)
+    os.makedirs(tmp_dir, exist_ok=True)  # exist_ok: tmp_dir is shared across
+                                          # subjects, now processed concurrently
         
     source_dir = params_gen['source_dir']
    
@@ -1694,5 +1758,149 @@ def process_tsa_subject( subject, my_dwi, verbose=False, debug=False ):
                         print('  Finished tract {0} for subject {1}'.format(tract_name, subject))
                     else:
                         print('  * Warning: Finished tract {0} for subject {1} with failures'.format(tract_name, subject))
-    
+
+    return failure_count
+
+
+# Warp a subject's native-space scalar DTI metric (FA, MD, or RD) into standard
+# space, smooth, and mask by each tract - the same "along-the-tract"
+# scalar-per-voxel output format process_tsa_subject() produces for its
+# regression-derived beta, but far cheaper: FA/MD come straight out of dtifit,
+# and RD is derived once as (L2+L3)/2 and cached alongside the other dtifit
+# outputs, so no per-voxel regression is needed. The warp+smooth step also
+# only has to run once per subject (not once per tract, like the TSA
+# regression does) since the same standard-space smoothed volume just gets
+# masked differently per tract.
+#
+# subject:        Subject to process
+# my_dwi:         Instance of DwiTracts, already initialized, with prerequisite
+#                  outputs generated (bidirectional tract estimates)
+# metric:         One of 'FA', 'MD', 'RD'
+# verbose:        Whether to print messages to the console
+# debug:          Whether to use debug mode (print lots to console)
+#
+def process_metric_subject( subject, my_dwi, metric, verbose=False, debug=False ):
+
+    if metric not in ('FA', 'MD', 'RD', 'AD'):
+        raise ValueError("metric must be one of 'FA', 'MD', 'RD', 'AD', got {0!r}".format(metric))
+
+    params_gen = my_dwi.params['general']
+    tmp_dir = params_gen['temp_dir']
+    os.makedirs(tmp_dir, exist_ok=True)  # exist_ok: tmp_dir is shared across
+                                          # subjects, now processed concurrently
+
+    params_regress = my_dwi.params['dwi_regressions']
+    fsl_root = params_regress['fsl_root']
+    fsl_maths = '{0}/bin/fslmaths'.format(fsl_root)
+    fsl_applywarp = '{0}/bin/applywarp'.format(fsl_root)
+
+    use_norm = params_regress['use_normalized']
+    standard_img = 'utils/{0}'.format(params_regress['standard_img'])
+
+    tract_names = my_dwi.tracts_final_bidir
+
+    if len(params_gen['prefix']) > 0:
+        prefix_sub = '{0}{1}'.format(params_gen['prefix'], subject)
+    else:
+        prefix_sub = subject
+    subject_dir = os.path.join(my_dwi.project_dir, params_gen['deriv_dir'], prefix_sub, params_gen['sub_dirs'])
+    dwi_dir = os.path.join(subject_dir, params_gen['dwi_dir'])
+
+    invwarp_file = '{0}/reg3G/FA_warp2Mean3G.nii.gz'.format(dwi_dir)
+
+    if metric == 'FA':
+        native_file = '{0}/dti_FA.nii.gz'.format(dwi_dir)
+    elif metric == 'MD':
+        native_file = '{0}/dti_MD.nii.gz'.format(dwi_dir)
+    elif metric == 'AD':
+        # Axial diffusivity = the largest eigenvalue (L1), a direct dtifit
+        # output like FA/MD (not derived, unlike RD below)
+        native_file = '{0}/dti_L1.nii.gz'.format(dwi_dir)
+    else:  # RD - not a direct dtifit output, derive once and cache it
+        l2_file = '{0}/dti_L2.nii.gz'.format(dwi_dir)
+        l3_file = '{0}/dti_L3.nii.gz'.format(dwi_dir)
+        native_file = '{0}/dti_RD.nii.gz'.format(dwi_dir)
+        if not os.path.isfile(native_file):
+            if not os.path.isfile(l2_file) or not os.path.isfile(l3_file):
+                if verbose:
+                    print('  * Warning: Subject {0} is missing L2/L3 eigenvalue maps for RD. Skipping.' \
+                          .format(subject))
+                return -1
+            cmd = '{0} {1} -add {2} -div 2 {3}'.format(fsl_maths, l2_file, l3_file, native_file)
+            err = utils.run_fsl(cmd)
+            if err and not params_regress['ignore_errors']:
+                if verbose:
+                    print('  * Error computing RD for subject {0}. Skipping.'.format(subject))
+                if debug:
+                    print(err)
+                return -1
+
+    if not os.path.isfile(invwarp_file) or not os.path.isfile(native_file):
+        if verbose:
+            print('  * Warning: Subject {0} is missing required files for {1}. Skipping.'.format(subject, metric))
+        return -1
+
+    subj_output_dir = '{0}/dwi/{1}/{2}'.format(subject_dir, params_regress['regress_dir'], params_gen['network_name'])
+    if not os.path.isdir(subj_output_dir):
+        os.makedirs(subj_output_dir)
+
+    fwhm_um = int(1000.0 * params_regress['beta_sm_fwhm'])
+    mni_file = '{0}/{1}.{2}.{3}.mni.nii.gz'.format(tmp_dir, subject, metric, params_gen['network_name'])
+    smooth_file = '{0}/{1}.{2}.{3}.mni_sm.nii.gz'.format(tmp_dir, subject, metric, params_gen['network_name'])
+
+    # Warp native metric volume to standard space (once per subject - unlike
+    # TSA's beta, this doesn't depend on which tract we're masking by)
+    cmd = '{0} -i {1} -o {2} -r {3} -w {4}'.format(fsl_applywarp, native_file, mni_file, standard_img, invwarp_file)
+    err = utils.run_fsl(cmd)
+    if err and not params_regress['ignore_errors']:
+        if verbose:
+            print('  * Error warping {0} for subject {1}. Skipping.'.format(metric, subject))
+        if debug:
+            print(err)
+        return -1
+    elif debug and err:
+        print(err)
+
+    # Smooth (once per subject)
+    cmd = '{0} {1} -kernel gauss {2} -fmean {3}' \
+          .format(fsl_maths, mni_file, params_regress['beta_sm_fwhm'] / 2.1231, smooth_file)
+    err = utils.run_fsl(cmd)
+    if err and not params_regress['ignore_errors']:
+        if verbose:
+            print('  * Error smoothing {0} for subject {1}. Skipping.'.format(metric, subject))
+        if debug:
+            print(err)
+        os.remove(mni_file)
+        return -1
+    elif debug and err:
+        print(err)
+
+    failure_count = 0
+    for tract_name in tract_names:
+        if use_norm:
+            tract_file_in = '{0}/tract_final_norm_bidir_{1}.nii.gz'.format(my_dwi.final_dir, tract_name)
+        else:
+            tract_file_in = '{0}/tract_final_bidir_{1}.nii.gz'.format(my_dwi.final_dir, tract_name)
+        if not os.path.isfile(tract_file_in):
+            if verbose:
+                print('  - Tract {0} not found. Skipping.'.format(tract_name))
+            continue
+
+        out_file = '{0}/{1}_mni_sm_{2}um_{3}.nii.gz'.format(subj_output_dir, metric, fwhm_um, tract_name)
+        cmd = '{0} {1} -mas {2} {3}'.format(fsl_maths, smooth_file, tract_file_in, out_file)
+        err = utils.run_fsl(cmd)
+        if err and not params_regress['ignore_errors']:
+            if verbose:
+                print('  * Error masking {0} for subject {1} on tract {2}.'.format(metric, subject, tract_name))
+            if debug:
+                print(err)
+            failure_count += 1
+        elif debug and err:
+            print(err)
+        elif verbose:
+            print('  Finished tract {0} for subject {1}'.format(tract_name, subject))
+
+    os.remove(mni_file)
+    os.remove(smooth_file)
+
     return failure_count

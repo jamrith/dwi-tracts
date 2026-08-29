@@ -10,7 +10,7 @@
    "rois_list":       "project/lc.rois",
    "roi_pairs":       "project/lc.pairs",
    "network_name":    "LC-MTL",
-   "subjects_file":   "project/127bvals.list",
+   "subjects_file":   "project/unique_glm_subjects.list",
    "dir_format":      "subject_first",
    "dwi_dir":         "dwi",
    "tracts_dir":      "tract_stats",

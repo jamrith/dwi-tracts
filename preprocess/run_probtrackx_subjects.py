@@ -19,14 +19,15 @@ import os
 import shutil
 import json
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pipeline_state import resolve_correction_method
+from run_probtrackx import load_config
+
 cwd = os.getcwd()
 
 config_file = sys.argv[1]
 
-with open(config_file, 'r') as myfile:
-    json_string=myfile.read()
-
-config = json.loads(json_string)
+config = load_config(config_file)
 config_gen = config['general']
 config_ptx = config['probtrackx']
 config_sched = config['scheduler']
@@ -58,8 +59,22 @@ for subject in subjects:
     session = config_gen['session']
     if len(session) > 0:
         session = '{0}/'.format(session)
-    subj_dir = '{0}/{1}{2}/{3}dwi' \
-                        .format(deriv_dir, config_gen['prefix'], subject, session)
+    dwi_dirname = config_gen.get('dwi_dirname', 'dwi')
+    if dwi_dirname == 'auto':
+        # Corrected-eddy pipeline: resolve dwi_topup/dwi_fugue/dwi_bdp the
+        # same way run_probtrackx.py itself does -- this loop only needs it
+        # to pre-create/clobber-check the right probtrackX output dir before
+        # submitting, but getting it wrong here silently creates a stray
+        # derived/$sess/dwi/probtrackX/... tree that doesn't match where the
+        # actual job writes its output.
+        sess_rel = '{0}{1}/{2}'.format(config_gen['prefix'], subject, session)
+        method = resolve_correction_method(sess_rel)
+        if method is None:
+            print('No dwi_<method> dir found for auto-resolution [{0}], skipping'.format(subject))
+            continue
+        dwi_dirname = 'dwi_{0}'.format(method)
+    subj_dir = '{0}/{1}{2}/{3}{4}' \
+                        .format(deriv_dir, config_gen['prefix'], subject, session, dwi_dirname)
     probtrackx_dir = '{0}/probtrackX/{1}'.format(subj_dir, config_ptx['network_name'])
 
     # Remove existing directory if clobber

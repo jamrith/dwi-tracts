@@ -4,7 +4,7 @@
     "preproc_config_file":   "project/config_preprocess.json",
     "tracts_config_file":    "project/config_tracts_lc.json",
     "covariates_file":       "project/covariates_basic.csv",
-    "subjects_file":         "project/glm_subjects.list",
+    "subjects_file":         "project/unique_glm_subjects.list",
     "standardized_beta":     false,
     "glm_output_dir":        "glms",
     "tract_threshold":       0.4,

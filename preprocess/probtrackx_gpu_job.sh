@@ -1,7 +1,8 @@
 #!/usr/bin/bash
 
 #SBATCH --qos=img
-#SBATCH --partition=imgvoltaq
+#SBATCH --account=uon-imaging
+#SBATCH --partition=imgampereq,imgvoltaq,imgpascalq
 # This specifies type of node job will use
 
 #SBATCH --nodes=1
@@ -57,6 +58,7 @@ fi
 export FSLDIR="/share/ConnLS/ADNI/fsl_mod"
 export PATH="/share/ConnLS/ADNI/fsl_mod/bin":$PATH
 
+cd /gpfs01/imgshare/ConnLS/ADNI/dwi-tracts/preprocess
 cmd="./run_probtrackx.py $1 $2"
 
 echo $cmd

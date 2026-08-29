@@ -159,37 +159,47 @@ def smooth_volume(volume, V_img, fwhm):
 # data:            NxM numpy array of vertex data columns
 #
 
-def write_polyline_mgui(polyline, filename, name='', data=None, data_names=None):
-    
+def write_polyline_mgui(polyline, filename, name='', data=None, data_names=None, data_formats=None):
+    """data_formats: optional dict {data_name: format_spec}, e.g.
+    {'pvals': '{0:.6e}'} -- overrides the default '{0:1.6f}' fixed 6-decimal
+    format for that column. The default is fine for xyz coordinates (mm) and
+    O(1-10)-scale stats like t/coef, but p-values span many orders of
+    magnitude and silently round to exactly 0.0 once they're smaller than
+    ~5e-7 under fixed-point formatting -- indistinguishable on read-back from
+    a p-value that was genuinely ~0. Use scientific notation for any column
+    where that matters."""
     if len(name) == 0:
         name = filename
-        
+
     M = 0
-    
+
     if data is not None:
         M = 1
         if len(data.shape) > 1:
             M = data.shape[1]
         if M == 1:
             data_names = [data_names];
-    
+
+    data_formats = data_formats or {}
+    formats = [data_formats.get(data_names[i], '{0:1.6f}') for i in range(M)] if M else []
+
     with open(filename, 'w') as writer:
         N = polyline.shape[0]
         writer.write('1\n{0} 0 {1}'.format(N, name))
         for i in range(0,M):
             writer.write(' {0}'.format(data_names[i]))
         writer.write('\n');
-        
+
         for i in range(0, N):
             writer.write('{0:1.6f} {1:1.6f} {2:1.6f}'.format(polyline[i,0], polyline[i,1], polyline[i,2]))
             if M == 1:
-                writer.write(' {0:1.6f}'.format(data[i]))
+                writer.write(' {0}'.format(formats[0].format(data[i])))
             else:
                 for j in range(0,M):
-                    writer.write(' {0:1.6f}'.format(data[i,j]))
-            writer.write('\n');                 
-                
-    
+                    writer.write(' {0}'.format(formats[j].format(data[i,j])))
+            writer.write('\n');
+
+
 # Reads a polyline from a ModelGUI poly3d format file
 #
 
@@ -215,7 +225,54 @@ def read_polyline_mgui(filename):
             line = reader.readline()
         
     return polyline
-    
+
+
+# Resamples a polyline's vertices to N_out points evenly spaced by fraction
+# of total arc length -- used to place per-distance-shell statistics (e.g.
+# extract_distance_traces_rft1d's tvals/pvals, one per integer flood-fill
+# distance from the seed) directly ON the tract's own known geometry,
+# instead of re-deriving an approximate path by taking the tract-mask
+# intensity argmax within each distance shell. That argmax reconstruction
+# is biased toward wherever the (density-weighted) tract mask is strongest
+# in each cross-section, which coincides with the true polyline for tracts
+# that stay near the real streamline density ridge, but visibly diverges
+# from it for a route deliberately fit through lower-density territory
+# (e.g. an alternate "medial" route) -- the fix is just to not re-derive
+# the path at all when the exact one used to build the tract is on disk.
+#
+# polyline:         (N,3) world-mm vertices, in order from seed to target
+# dists:             1D array of the shell "distances" (arbitrary units,
+#                    e.g. flood-fill voxel-hop count) each output point
+#                    corresponds to -- only used for their RELATIVE
+#                    ordering/spacing (linearly rescaled to the polyline's
+#                    own arc length), so exact unit agreement with the
+#                    polyline's mm scale isn't required
+#
+# Returns:          (len(dists), 3) world-mm points, one per entry of dists
+#
+def resample_polyline_by_distance(polyline, dists):
+    seg = np.diff(polyline, axis=0)
+    seg_len = np.sqrt(np.sum(seg**2, axis=1))
+    cum_len = np.concatenate([[0.0], np.cumsum(seg_len)])
+    total_len = cum_len[-1]
+
+    dists = np.asarray(dists, dtype=float)
+    d_min, d_max = dists.min(), dists.max()
+    if d_max > d_min:
+        frac = (dists - d_min) / (d_max - d_min)
+    else:
+        frac = np.zeros_like(dists)
+    target_len = frac * total_len
+
+    out = np.zeros((dists.size, 3))
+    for i, tl in enumerate(target_len):
+        j = np.searchsorted(cum_len, tl, side='right') - 1
+        j = min(max(j, 0), len(seg_len) - 1)
+        seg_frac = 0.0 if seg_len[j] == 0 else (tl - cum_len[j]) / seg_len[j]
+        seg_frac = min(max(seg_frac, 0.0), 1.0)
+        out[i, :] = polyline[j, :] + seg_frac * (polyline[j + 1, :] - polyline[j, :])
+    return out
+
 
 # Flips all vectors whose major axis (component with maximal magnitude) is negative
 #
@@ -625,12 +682,48 @@ def get_clusters( pvals, tvals, alpha, min_clust=1 ):
           
     return clusters
 
+# rft1d.prob.RFTCalculator.p.cluster(k, u) internally computes an uncorrected
+# per-upcrossing probability p_raw = exp(-beta*k**(2/D)) (D=1 for a 1D field
+# here, so p_raw = exp(-beta*k**2)), then applies a Poisson-clumping
+# correction for the expected number of upcrossings Ec: the value actually
+# returned is P = 1 - exp(-(Ec+eps)*p_raw). Both exp() calls underflow to
+# exactly 0.0 in float64 once their argument drops below ~-745 -- i.e. once
+# the true P is smaller than ~5e-324, NOT merely smaller than 1e-6. A long
+# and/or very strong cluster's true P can be many, many orders of magnitude
+# past that floor (e.g. 1e-800), and rft1d has no way to report that: it can
+# only ever return literally 0.0.
+#
+# For P this small, (Ec+eps)*p_raw is likewise astronomically small, so
+# 1-exp(-x) = x - x**2/2 + ... reduces to just x = (Ec+eps)*p_raw to
+# overwhelming precision (the neglected x**2/2 term is smaller than the kept
+# term by another ~745 orders of magnitude in exactly this regime) --
+# log(P) = log(Ec+eps) - beta*k**2. Ec and Ek (needed for beta) are both
+# available without any exp() call via the calculator's public
+# expected.number_of_upcrossings()/resels_per_upcrossing() API, so this
+# recomputes log(P) directly in log-space: verified to match
+# RFTCalculator.p.cluster() to ~1e-4 relative error even where the latter is
+# still representable, converging to exact as the true value shrinks -- and,
+# unlike rft1d's own exp()-based path, this never underflows since it's just
+# additions and a multiplication, not an exponential.
+def get_cluster_logp_rft1d( rftcalc, k_resels, t_star ):
+    Ec = rftcalc.expected.number_of_upcrossings(t_star)
+    Ek = rftcalc.expected.resels_per_upcrossing(t_star)
+    beta = (math.gamma(1.5) / Ek) ** 2
+    eps = np.finfo(float).eps
+    return math.log(Ec + eps) + (-beta * (k_resels ** 2))
+
+
 # Identify and label clusters in a set of t-values using 1-dimensional
 # random field theory. Handles positive and negative clusters separately.
+# Returns (pvals, clusters, logpvals): logpvals is the natural log of each
+# cluster's p-value, computed analytically (see get_cluster_logp_rft1d) so
+# it stays exact even where pvals has underflowed to exactly 0.0 -- use it
+# to report/display genuine precision beyond what pvals itself can hold.
 def get_tvalue_rft1d_clusters( tvals, alpha, df, fwhm, min_clust ):
 
     N_nodes = tvals.size
     pvals = np.ones(N_nodes)
+    logpvals = np.zeros(N_nodes)
     clusters = np.zeros(N_nodes, dtype=int)
 
     t_star = rft1d.t.isf(alpha, df, N_nodes, fwhm)
@@ -649,6 +742,7 @@ def get_tvalue_rft1d_clusters( tvals, alpha, df, fwhm, min_clust ):
             mask = (L_pos == (i + 1))
             clusters[mask] = cluster_label
             pvals[mask] = p_cluster
+            logpvals[mask] = get_cluster_logp_rft1d(rftcalc, k_resels, t_star)
             cluster_label += 1
 
     # Process negative clusters (-tvals >= t_star, i.e., tvals <= -t_star)
@@ -662,9 +756,10 @@ def get_tvalue_rft1d_clusters( tvals, alpha, df, fwhm, min_clust ):
             mask = (L_neg == (i + 1))
             clusters[mask] = cluster_label
             pvals[mask] = p_cluster
+            logpvals[mask] = get_cluster_logp_rft1d(rftcalc, k_resels, t_star)
             cluster_label += 1
 
-    return pvals, clusters
+    return pvals, clusters, logpvals
 
 
 # Generates a matrix of t-values [N_perm X N_dist] from permutations of V_dist,

@@ -9,7 +9,7 @@
       "rois_list": "project/lc-native-ba35-only.rois",
       "roi_pairs": "project/lc-native-ba35-only.pairs",
       "network_name": "LC-BA35-only-nonbdp-thr007",
-      "subjects_file": "project/qa_diag/lc_ba35_nonbdp_461_8_13.list",
+      "subjects_file": "project/qa_diag/lc_ba35_nonbdp_478_8_24.list",
       "dir_format": "subject_first",
       "dwi_dir": "dwi_lcba35_corrected",
       "tracts_dir": "tract_stats_nonbdp_thr007",

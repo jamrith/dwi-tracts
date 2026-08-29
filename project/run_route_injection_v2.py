@@ -319,8 +319,16 @@ def run_one(cohort, route, log=print):
     tsa_elapsed = time.time() - t0
     log("  compute_tsa done in {0:.1f}s (ok={1})".format(tsa_elapsed, tsa_ok))
 
+    # compute_tsa() only writes each subject's own beta map (what the GLMs
+    # actually consume); the group-mean tsa_avr/ NIfTI is a separate
+    # convenience step the pipeline doesn't call automatically.
+    log("  Running generate_mean_tsa_images() for {0}...".format(expected_tracts))
+    avr_ok = my_dwi.generate_mean_tsa_images(verbose=True, clobber=True)
+    log("  generate_mean_tsa_images done (ok={0})".format(avr_ok))
+
     return {"status": "tsa_done" if tsa_ok else "tsa_failed",
-            "diags": diags, "tsa_elapsed_s": tsa_elapsed, "config_path": config_path}
+            "diags": diags, "tsa_elapsed_s": tsa_elapsed, "config_path": config_path,
+            "tsa_avr_ok": avr_ok}
 
 
 if __name__ == "__main__":

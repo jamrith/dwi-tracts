@@ -1,106 +1,115 @@
 {
-  "general": {
-    "preproc_config_file": "project/qa_diag/route_v2_configs/tatumonly/config_preprocess_medial_combined.json",
-    "tracts_config_file": "project/qa_diag/route_v2_configs/tatumonly/config_tracts_medial_tatumonly_LR_v2.json",
-    "covariates_file": "project/covariates_basic.csv",
-    "subjects_file": "project/qa_diag/tatum_187_with_tractography.list",
-    "standardized_beta": false,
-    "glm_output_dir": "glms_tatumonly_medial_v2_LR",
-    "tract_threshold": 0.4,
-    "snet_output_dir": "snet",
-    "summary_metric": "max",
-    "min_clust": 3,
-    "fdr_alpha": 0.05,
-    "fdr_method": "fdr_tsbky",
-    "nan_value": 0,
-    "clobber": true,
-    "dryrun": false,
-    "verbose": true
-  },
-  "glm": {
-    "glm-lc-ba35-tatumonly-medial-v2-LR": {
-      "factors": [
-        "AGE",
-        "FEMALE",
-        "AD",
-        "MCI"
+   "general": {
+      "preproc_config_file": "project/qa_diag/route_v2_configs/tatumonly/config_preprocess_medial.json",
+      "tracts_config_file": "project/qa_diag/route_v2_configs/tatumonly/config_tracts_medial_tatumonly_LR_v2.json",
+      "covariates_file": "project/covariates_basic.csv",
+      "subjects_file": "project/qa_diag/tatum_matched_final_8_12.list",
+      "standardized_beta": true,
+      "glm_output_dir": "glms_tatumonly_medial_v2_LR",
+      "tract_threshold": 0.4,
+      "snet_output_dir": "snet",
+      "summary_metric": "max",
+      "min_clust": 3,
+      "fdr_alpha": 0.05,
+      "fdr_method": "fdr_tsbky",
+      "nan_value": 0,
+      "clobber": true,
+      "dryrun": false,
+      "verbose": true,
+      "effect_scales": {
+         "std": {
+            "AGE": 10
+         },
+         "std_binary": {
+            "AGE": 10,
+            "_categorical_default": "zscore"
+         }
+      }
+   },
+   "glm": {
+      "glm-lc-ba35-tatumonly-medial-v2-LR": {
+         "factors": [
+            "AGE",
+            "FEMALE",
+            "AD",
+            "MCI"
+         ],
+         "categorical": {
+            "AGE": false,
+            "FEMALE": true,
+            "AD": true,
+            "MCI": true,
+            "CN": true
+         },
+         "levels": {
+            "FEMALE": {
+               "Male": "0",
+               "Female": "1"
+            },
+            "AD": {
+               "No dementia": "0",
+               "Probable AD": "1"
+            },
+            "MCI": {
+               "No MCI": "0",
+               "MCI": "1"
+            }
+         },
+         "intercept": true,
+         "outlier_z": 3.5
+      }
+   },
+   "traces": {
+      "tract_threshold": 0.5,
+      "cluster_alpha": 0.01,
+      "fdr_method": "fdr_tsbky",
+      "fdr_alpha": 0.05,
+      "pval_alpha": 0.05,
+      "plot_permutations": true,
+      "n_permutations": 5000,
+      "max_weight_factor": 1
+   },
+   "space-net": {
+      "eps": 0.1,
+      "memory": "nilearn_cache",
+      "penalty": "graph-net",
+      "cv": 3
+   },
+   "plots": {
+      "chord": {
+         "show_title": false,
+         "colormap": "viridis",
+         "replace_text": "",
+         "min_tcount": 2
+      }
+   },
+   "figures": {
+      "network_label": "LC-BA35medial (Tatum-only, v2 routes)",
+      "tracts_dir": "/share/ConnLS/ADNI/tract_stats_tatumonly_dorsal",
+      "network_dir": "LC-BA35-medial-tatumonly-dorsal",
+      "color": "#ff8c00",
+      "pairs_2": [
+         [
+            "LC_L",
+            "BA35_L"
+         ],
+         [
+            "LC_R",
+            "BA35_R"
+         ]
       ],
-      "categorical": {
-        "AGE": false,
-        "FEMALE": true,
-        "AD": true,
-        "MCI": true,
-        "CN": true
-      },
-      "levels": {
-        "FEMALE": {
-          "Male": "0",
-          "Female": "1"
-        },
-        "AD": {
-          "No dementia": "0",
-          "Probable AD": "1"
-        },
-        "MCI": {
-          "No MCI": "0",
-          "MCI": "1"
-        }
-      },
-      "intercept": true,
-      "outlier_z": 3.5
-    }
-  },
-  "traces": {
-    "tract_threshold": 0.5,
-    "cluster_alpha": 0.01,
-    "fdr_method": "fdr_tsbky",
-    "fdr_alpha": 0.05,
-    "pval_alpha": 0.05,
-    "plot_permutations": true,
-    "n_permutations": 5000,
-    "max_weight_factor": 1
-  },
-  "space-net": {
-    "eps": 0.1,
-    "memory": "nilearn_cache",
-    "penalty": "graph-net",
-    "cv": 3
-  },
-  "plots": {
-    "chord": {
-      "show_title": false,
-      "colormap": "viridis",
-      "replace_text": "",
-      "min_tcount": 2
-    }
-  },
-  "figures": {
-    "network_label": "LC-BA35medial (Tatum-only, v2 routes)",
-    "tracts_dir": "/share/ConnLS/ADNI/tract_stats_tatumonly_dorsal",
-    "network_dir": "LC-BA35-only-tatumonly-dorsal",
-    "color": "#ff8c00",
-    "pairs_2": [
-      [
-        "LC_L",
-        "BA35medial_L"
+      "pairs_3": [
+         [
+            "L",
+            "LC_L",
+            "BA35_L"
+         ],
+         [
+            "R",
+            "LC_R",
+            "BA35_R"
+         ]
       ],
-      [
-        "LC_R",
-        "BA35medial_R"
-      ]
-    ],
-    "pairs_3": [
-      [
-        "L",
-        "LC_L",
-        "BA35medial_L"
-      ],
-      [
-        "R",
-        "LC_R",
-        "BA35medial_R"
-      ]
-    ],
-    "compare_label": "TSA_tatumonly_medial_v2_LR"
-  }
+      "compare_label": "TSA_tatumonly_medial_v2_LR"
+   }
 }

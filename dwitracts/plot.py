@@ -67,25 +67,34 @@ def plot_tsa_histograms( params, my_dwi, tract_names=None, threshold=0.5, verbos
     N_roi = len(my_dwi.rois)
     N_itr = int(N_roi*(N_roi-1)/2)
     
+    # Tract names follow seed->target order (e.g. 'LC_L_BA35_L'), which is
+    # NOT alphabetical for this pipeline's ROI naming (LC sorts after BA35).
+    # rois.sort() below is still needed for a stable grid layout, but tract
+    # names must be matched trying BOTH orderings -- matching only
+    # '{rois[i]}_{rois[j]}' (i<j in sorted order) silently found zero
+    # tracts for every LC-BA35 network and collapsed the 'all' stats to NaN.
     rois = []
     for i in range(0,N_roi-1):
         for j in range(i,N_roi):
-            tract = '{0}_{1}'.format(my_dwi.rois[i], my_dwi.rois[j])
-            if tract in tract_names:
+            tract_fwd = '{0}_{1}'.format(my_dwi.rois[i], my_dwi.rois[j])
+            tract_rev = '{0}_{1}'.format(my_dwi.rois[j], my_dwi.rois[i])
+            if tract_fwd in tract_names or tract_rev in tract_names:
                 if not my_dwi.rois[i] in rois:
                     rois.append(my_dwi.rois[i])
                 if not my_dwi.rois[j] in rois:
-                    rois.append(my_dwi.rois[j]) 
-    
+                    rois.append(my_dwi.rois[j])
+
     rois.sort()
     N_roi = len(rois)
-    
+
     tracts = []
     ii = []
     jj = []
     for i in range(0,N_roi-1):
         for j in range(i+1,N_roi):
-            tract = '{0}_{1}'.format(rois[i], rois[j])
+            tract_fwd = '{0}_{1}'.format(rois[i], rois[j])
+            tract_rev = '{0}_{1}'.format(rois[j], rois[i])
+            tract = tract_fwd if tract_fwd in tract_names else tract_rev
             if tract in tract_names:
                 tracts.append(tract)
                 ii.append(i)

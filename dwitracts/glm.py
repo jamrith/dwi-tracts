@@ -86,65 +86,112 @@ class DwiTractsGlm:
             return False
 
         Xs = {}
+        Xs_scaled = {}  # {glm: {scheme_name: Xi}}
         subjects = self.subject_data['Subject'].values
         N_sub = len(subjects)
         self.subjects = subjects
-        
-        # Compile covariate matrix
+
+        # User-defined effect-size scaling schemes, from the config's
+        # general.effect_scales block (optional; skipped entirely if
+        # absent). Each scheme is a name -> per-factor spec dict, e.g.:
+        #   "effect_scales": {
+        #     "std":        {"AGE": 10, "_default": "zscore"},
+        #     "std_binary": {"AGE": 10, "_default": "zscore", "_categorical_default": "zscore"},
+        #     "per10moca":  {"MOCA": 10}
+        #   }
+        # Per-factor value is "zscore" (z-score across subjects), "raw"
+        # (leave untouched), or a number (divide by that fixed unit, e.g.
+        # AGE:10 -> coefficient per 10 years). "_default" sets the fallback
+        # for continuous factors not otherwise listed (defaults to
+        # "zscore" if the key itself is absent); "_categorical_default"
+        # sets the fallback for categorical/binary factors not otherwise
+        # listed (defaults to "raw" -- i.e. left 0/1 -- since z-scoring a
+        # binary split is only meaningful when you deliberately want to
+        # compare its magnitude against continuous predictors on the same
+        # per-SD footing, which "std_binary"-style schemes opt into
+        # explicitly). Every scheme's y (outcome) is z-scored, so its
+        # coefficients come out in SD-of-outcome units regardless of how
+        # each predictor is scaled -- that's the whole point of an "effect
+        # size" scheme, vs. the always-computed fully-raw "Xs"/y-not-
+        # standardized fit below.
+        #
+        # t/p-values are mathematically IDENTICAL across every scheme (OLS
+        # t-stats are invariant to rescaling any predictor and/or the
+        # outcome by a positive constant) -- so only coefficients differ
+        # per scheme; significance/RFT results never need recomputing.
+        effect_scales = params_gen.get('effect_scales', {})
+
+        # Deal with categorical variables ONCE (shared by every design
+        # matrix below): recode as 0/1 dummy coding (not -1/+1) so the
+        # coefficient is a direct group-vs-group difference (in whatever
+        # units y is in) rather than half that (a -1->+1 step is a 2-unit
+        # jump).
         for glm in params_glm:
-
-            factors = params_glm[glm]['factors']
+            factors_raw = [f for f in params_glm[glm]['factors']]
             categorical = params_glm[glm]['categorical']
-            add_intercept = params_glm[glm]['intercept']
-            Xi = np.empty((N_sub, len(factors)+1))
-
-            # Deal with categorical variables
-            for factor in factors:
-                if categorical[factor]:
+            for factor in factors_raw:
+                if factor.find('*') < 0 and categorical.get(factor, False):
                     x = self.subject_data[factor].values
-                    vals = np.unique(x) # Return value is sorted; lower value is assigned -1, higher +1
+                    vals = np.unique(x) # Return value is sorted; lower value is assigned 0, higher 1
                     if len(vals) != 2:
                         print('Factor {0} has {1} levels. Can only have two.')
                         assert False
-                    # Encode as -1, 1
                     xx = x.copy()
-                    for j, k in zip([-1, 1], vals):
+                    for j, k in zip([0, 1], vals):
                         xx[x == k] = j
                     self.subject_data[factor] = xx
 
-            # Add intercept
+        def build_Xi(factors, add_intercept, transform):
+            Xi = np.empty((N_sub, len(factors) + 1))
             i = 0
             if add_intercept:
-                Xi[:,0] = np.ones(N_sub) # This is the intercept term
+                Xi[:, 0] = np.ones(N_sub)
                 i = 1
-
-            # Standardize if necessary
-            if params_gen['standardized_beta']:
-                for factor in factors:
-                    if not factor.find('*') < 0:
-                        x = self.subject_data[factor].values
-                        x = stats.zscore(x)
-                        self.subject_data[factor] = x
-
             for factor in factors:
                 if factor.find('*') > -1:
-                    # Create interaction term
+                    # Interaction term: product of its (already-transformed,
+                    # since each part is itself a plain factor) parts.
                     parts = factor.split('*')
                     x = np.ones((N_sub,))
                     for part in parts:
-                        x = x * self.subject_data[part].values
+                        x = x * transform(part, self.subject_data[part].values)
                 else:
-                    x = self.subject_data[factor].values
-
-                Xi[:,i] = x
+                    x = transform(factor, self.subject_data[factor].values)
+                Xi[:, i] = x
                 i += 1
+            return Xi
 
-            Xs[glm] = Xi
+        def raw_transform(factor, x):
+            return x
+
+        def make_scaled_transform(categorical, scheme_spec):
+            default_cont = scheme_spec.get('_default', 'zscore')
+            default_cat = scheme_spec.get('_categorical_default', 'raw')
+
+            def transform(factor, x):
+                is_cat = categorical.get(factor, False)
+                spec = scheme_spec.get(factor, default_cat if is_cat else default_cont)
+                if spec == 'raw':
+                    return x
+                if spec == 'zscore':
+                    return stats.zscore(x)
+                return x / float(spec)  # fixed-unit divisor, e.g. AGE -> 10
+            return transform
+
+        for glm in params_glm:
+            factors = params_glm[glm]['factors']
+            categorical = params_glm[glm]['categorical']
+            add_intercept = params_glm[glm]['intercept']
+
+            Xs[glm] = build_Xi(factors, add_intercept, raw_transform)
+            Xs_scaled[glm] = {name: build_Xi(factors, add_intercept, make_scaled_transform(categorical, spec))
+                              for name, spec in effect_scales.items()}
 
             if add_intercept:
                 factors.insert(0, 'Intercept')
-        
+
         self.Xs = Xs
+        self.Xs_scaled = Xs_scaled
         
         # Get tract list
         tract_files = []
@@ -159,8 +206,14 @@ class DwiTractsGlm:
 
             netconfig = json.loads(json_string)
             networks = netconfig['networks']
-            rois = [net['seeds'][0] for net in netconfig['networks']] # Assuming only one seed per network
-            target_rois = {net['seeds'][0]: net['targets'] for net in netconfig['networks']}
+            # Seeds/targets may be plain ROI-name strings or native-ROI dicts
+            # ({"roi": ..., "space": "native", ...}, per run_probtrackx.py's
+            # roi_name()) - extract the name string either way.
+            def _roi_name(entry):
+                return entry['roi'] if isinstance(entry, dict) else entry
+            rois = [_roi_name(net['seeds'][0]) for net in netconfig['networks']] # Assuming only one seed per network
+            target_rois = {_roi_name(net['seeds'][0]): [_roi_name(t) for t in net['targets']]
+                            for net in netconfig['networks']}
             #TODO: Multiple seed networks handling
 
         self.rois = rois
@@ -204,19 +257,20 @@ class DwiTractsGlm:
         params_glm = self.params['glm']
         params_gen = self.params['general']
         params_tracts = self.params['tracts']
-        params_regress = params_tracts['dwi_regressions']   
+        params_regress = params_tracts['dwi_regressions']
         params_avdir = params_tracts['average_directions']
-        
+
         use_norm = params_avdir['use_normalized']
-        
+        # Which per-subject scalar volume to feed the GLM: 'betas' (TSA,
+        # written by process_tsa_subject) by default for backwards
+        # compatibility, or 'FA'/'MD'/'RD' (written by process_metric_subject)
+        # to run the same GLM/RFT pipeline on a standard DTI metric instead.
+        metric_stem = params_regress.get('metric_stem', 'betas')
+
         tract_thresh = self.tract_threshold
-        
+
         N_sub = len(self.subjects)
-        
-        std_str = ''
-        if params_gen['standardized_beta']:
-            std_str = '_std'
-            
+
         for glm in params_glm:
             glm_dir = '{0}/{1}/{2}'.format(self.tracts_dir, params_gen['glm_output_dir'], glm)
             if os.path.exists(glm_dir):
@@ -279,8 +333,8 @@ class DwiTractsGlm:
                                                params_tracts['general']['sub_dirs'])
                     subj_output_dir = '{0}/dwi/{1}/{2}'.format(subject_dir, params_regress['regress_dir'], \
                                                                params_tracts['general']['network_name'])
-                    beta_file = '{0}/betas_mni_sm_{1}um_{2}.nii.gz' \
-                                          .format(subj_output_dir, int(1000.0*params_regress['beta_sm_fwhm']), tract_name)
+                    beta_file = '{0}/{1}_mni_sm_{2}um_{3}.nii.gz' \
+                                          .format(subj_output_dir, metric_stem, int(1000.0*params_regress['beta_sm_fwhm']), tract_name)
 
                     try:
                         V_sub = nib.load(beta_file).get_fdata()
@@ -303,21 +357,26 @@ class DwiTractsGlm:
                     pval_dir = '{0}/pval'.format(glm_dir);
                     resid_dir = '{0}/resid'.format(glm_dir);
 
-                    X = self.Xs[glm]
-                    V_coef = {}
-                    V_tval = {}
-                    V_pval = {}
-                    V_pval_fdr = {}
-                    V_sig_fdr = {}
-                    V_resid = np.zeros((idx.size, N_sub))
+                    # Always fit the fully-raw variant (natural units, y not
+                    # standardized) plus one variant per user-defined
+                    # general.effect_scales scheme (y z-scored to SD units,
+                    # per-factor X scaling as that scheme specifies) -- see
+                    # initialize() for how Xs_scaled is built. suffix ''
+                    # is raw; '_<scheme_name>' for each scheme. t/p-values
+                    # are mathematically identical across every variant (OLS
+                    # invariance to linear rescaling), only coef differs --
+                    # computed per-variant anyway for simplicity/robustness
+                    # rather than relying on that in floating point.
+                    variants = [('', self.Xs[glm], False)]
+                    variants += [('_{0}'.format(name), Xv, True)
+                                for name, Xv in self.Xs_scaled.get(glm, {}).items()]
 
-                    for factor in factors:
-                        V_coef[factor] = np.zeros(idx.size)
-                        V_tval[factor] = np.zeros(idx.size)
-                        V_pval[factor] = np.ones(idx.size)
-                        V_pval_fdr[factor] = np.ones(idx.size)
-                        V_sig_fdr[factor] = np.zeros(idx.size)
-
+                    V_coef = {suf: {f: np.zeros(idx.size) for f in factors} for suf, _, _ in variants}
+                    V_tval = {suf: {f: np.zeros(idx.size) for f in factors} for suf, _, _ in variants}
+                    V_pval = {suf: {f: np.ones(idx.size) for f in factors} for suf, _, _ in variants}
+                    V_pval_fdr = {suf: {f: np.ones(idx.size) for f in factors} for suf, _, _ in variants}
+                    V_sig_fdr = {suf: {f: np.zeros(idx.size) for f in factors} for suf, _, _ in variants}
+                    V_resid = np.zeros((idx.size, N_sub))  # raw-variant only; RFT/FWHM is scale-invariant
 
                     for j in tqdm_notebook(range(0, idx.size), desc='{0}: '.format(glm) ):
                         y = V_betas[:,j]
@@ -329,29 +388,38 @@ class DwiTractsGlm:
                             zthres = [float('-inf'), float('inf')]
                         idx_ok = np.flatnonzero(np.logical_and(y >= zthres[0], y <= zthres[1]))
 
-                        results = sm.OLS(y[idx_ok], X[idx_ok]).fit()
-                        V_resid[j,idx_ok] = results.resid
+                        for suf, Xv, do_std in variants:
+                            y_fit = y[idx_ok]
+                            if do_std:
+                                y_std = y_fit.std()
+                                if y_std > 0:
+                                    y_fit = (y_fit - y_fit.mean()) / y_std
 
-                        for factor, k in zip(factors, range(0,len(factors))):
-                            V_coef[factor][j] = results.params[k]
-                            V_tval[factor][j] = results.tvalues[k]
-                            V_pval[factor][j] = results.pvalues[k]
+                            results = sm.OLS(y_fit, Xv[idx_ok]).fit()
+                            if suf == '':
+                                V_resid[j,idx_ok] = results.resid
 
-                    # Apply FDR correction
-                    for factor in factors:
-                        try:
-                            R = smm.multipletests(V_pval[factor], params_gen['fdr_alpha'], params_gen['fdr_method'])
-                            V_pval_fdr[factor] = R[1]
-                            V_sig_fdr[factor] = np.logical_not(R[0])
-                        except ZeroDivisionError:
-                            V_pval_fdr[factor] = V_pval[factor]
-                            V_sig_fdr[factor] = np.logical_not(V_pval[factor]>0.05)
-                            if verbose:
-                                print('      Warning: Zero division in FDR correction (!?) for {0}.'.format(factor))
+                            for factor, k in zip(factors, range(0,len(factors))):
+                                V_coef[suf][factor][j] = results.params[k]
+                                V_tval[suf][factor][j] = results.tvalues[k]
+                                V_pval[suf][factor][j] = results.pvalues[k]
+
+                    # Apply FDR correction (per variant, per factor)
+                    for suf, _, _ in variants:
+                        for factor in factors:
+                            try:
+                                R = smm.multipletests(V_pval[suf][factor], params_gen['fdr_alpha'], params_gen['fdr_method'])
+                                V_pval_fdr[suf][factor] = R[1]
+                                V_sig_fdr[suf][factor] = np.logical_not(R[0])
+                            except ZeroDivisionError:
+                                V_pval_fdr[suf][factor] = V_pval[suf][factor]
+                                V_sig_fdr[suf][factor] = np.logical_not(V_pval[suf][factor]>0.05)
+                                if verbose:
+                                    print('      Warning: Zero division in FDR correction (!?) for {0}{1}.'.format(factor, suf))
 
 
-                    # Write residuals to file
-                    output_file_resid = '{0}/{1}{2}.nii.gz'.format(resid_dir, tract_name, std_str)
+                    # Write residuals to file (raw variant only)
+                    output_file_resid = '{0}/{1}.nii.gz'.format(resid_dir, tract_name)
                     V_resids = np.zeros((V_stats.shape[0], V_stats.shape[1], V_stats.shape[2], N_sub))
                     for s in range(0,N_sub):
                         V_resids[idx3[0],idx3[1],idx3[2],s] = V_resid[:,s]
@@ -361,34 +429,35 @@ class DwiTractsGlm:
                         print('      Writing residuals {0}'.format(img.shape))
                     nib.save(img, output_file_resid)
 
-                    # Write result to file
-                    for factor in factors:
-                        factor_str = factor.replace('*','X')
-                        output_file_coef = '{0}/{1}_{2}{3}.nii.gz'.format(coef_dir, tract_name, factor_str, std_str)
-                        output_file_tval = '{0}/{1}_{2}{3}.nii.gz'.format(tval_dir, tract_name, factor_str, std_str)
-                        output_file_pval = '{0}/{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, std_str)
-                        output_file_pval_fdr = '{0}/fdr_{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, std_str)
-                        output_file_pval_sigfdr = '{0}/sigfdr_{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, std_str)
+                    # Write results to file, per variant
+                    for suf, _, _ in variants:
+                        for factor in factors:
+                            factor_str = factor.replace('*','X')
+                            output_file_coef = '{0}/{1}_{2}{3}.nii.gz'.format(coef_dir, tract_name, factor_str, suf)
+                            output_file_tval = '{0}/{1}_{2}{3}.nii.gz'.format(tval_dir, tract_name, factor_str, suf)
+                            output_file_pval = '{0}/{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, suf)
+                            output_file_pval_fdr = '{0}/fdr_{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, suf)
+                            output_file_pval_sigfdr = '{0}/sigfdr_{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, suf)
 
-                        V_stats.fill(0)
-                        V_stats[idx3] = V_coef[factor]
-                        img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
-                        nib.save(img, output_file_coef)
-                        V_stats[idx3] = V_tval[factor]
-                        img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
-                        nib.save(img, output_file_tval)
-                        V_stats[idx3] = V_pval[factor]
-                        img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
-                        nib.save(img, output_file_pval)
-                        V_stats[idx3] = V_pval_fdr[factor]
-                        img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
-                        nib.save(img, output_file_pval_fdr)
-                        V_stats[idx3] = V_sig_fdr[factor]
-                        img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
-                        nib.save(img, output_file_pval_sigfdr)
+                            V_stats.fill(0)
+                            V_stats[idx3] = V_coef[suf][factor]
+                            img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
+                            nib.save(img, output_file_coef)
+                            V_stats[idx3] = V_tval[suf][factor]
+                            img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
+                            nib.save(img, output_file_tval)
+                            V_stats[idx3] = V_pval[suf][factor]
+                            img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
+                            nib.save(img, output_file_pval)
+                            V_stats[idx3] = V_pval_fdr[suf][factor]
+                            img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
+                            nib.save(img, output_file_pval_fdr)
+                            V_stats[idx3] = V_sig_fdr[suf][factor]
+                            img = nib.Nifti1Image(V_stats, V_img.affine, V_img.header)
+                            nib.save(img, output_file_pval_sigfdr)
 
-                        if verbose:
-                            print('      Wrote {0}-{1}'.format(glm, factor))
+                            if verbose:
+                                print('      Wrote {0}-{1}{2}'.format(glm, factor, suf))
                 if verbose:
                     print('   Finished {0}'.format(tract_name))
 
@@ -435,9 +504,12 @@ class DwiTractsGlm:
                 shutil.rmtree(output_dir)
             os.makedirs(output_dir)
         
-        std_str = ''
-        if params_gen['standardized_beta']:
-            std_str = '_std'
+        # '' (raw, natural units) plus one per general.effect_scales scheme
+        # (see initialize()/fit_glms()) -- whichever coef_<tract>_<factor>
+        # {suf}.nii.gz files fit_glms() actually wrote are picked up below;
+        # tval/pval/fdr_pval are read from the raw variant only (identical
+        # across variants by OLS invariance, so no need to duplicate).
+        variant_sufs = [''] + ['_{0}'.format(s) for s in params_gen.get('effect_scales', {})]
 
         nanval = float(params_gen['nan_value'])
         N_sub = len(self.subjects)
@@ -477,43 +549,47 @@ class DwiTractsGlm:
                 # For each GLM:
                 for glm in params_glm:
                     factors = params_glm[glm]['factors']
-                    Nf = len(factors)
-                    formats = ['%d']
-                    for i in range(0,4):
-                        for factor in factors:
-                            formats.append('%1.7e')
 
                     glm_dir = '{0}/{1}/{2}'.format(self.tracts_dir, params_gen['glm_output_dir'], glm)
                     output_dir = '{0}/summary-{1}_thr{2}'.format(glm_dir, metric, thresh_str)
 
-                    tval_dir = '{0}/tval'.format(glm_dir, thresh_str);
-                    coef_dir = '{0}/coef'.format(glm_dir, thresh_str);
-                    pval_dir = '{0}/pval'.format(glm_dir, thresh_str);
-                    resid_dir = '{0}/resid'.format(glm_dir, thresh_str);
-                    j = 1
-                    M = np.zeros((Nd, 4*Nf+1))
-                    M[:,0] = dists
+                    tval_dir = '{0}/tval'.format(glm_dir);
+                    coef_dir = '{0}/coef'.format(glm_dir);
+                    pval_dir = '{0}/pval'.format(glm_dir);
+                    resid_dir = '{0}/resid'.format(glm_dir);
 
-                    hdr = 'Distance'
+                    csv_cols = {'Distance': dists}
 
-                    # Extract residuals
-                    resid_file = '{0}/{1}{2}.nii.gz'.format(resid_dir, tract_name, std_str)
+                    # Residuals are the raw variant only (RFT/FWHM estimation
+                    # is scale-invariant, so this is valid for every variant)
+                    resid_file = '{0}/{1}.nii.gz'.format(resid_dir, tract_name)
                     V_resids = nib.load(resid_file).get_fdata()
 
                     # For each factor:
                     for factor in factors:
                         factor_str = factor.replace('*','X')
 
-                        # Read stat image
-                        tval_file = '{0}/{1}_{2}{3}.nii.gz'.format(tval_dir, tract_name, factor_str, std_str)
-                        coef_file = '{0}/{1}_{2}{3}.nii.gz'.format(coef_dir, tract_name, factor_str, std_str)
-                        pval_file = '{0}/{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, std_str)
-                        fdrpval_file = '{0}/fdr_{1}_{2}{3}.nii.gz'.format(pval_dir, tract_name, factor_str, std_str)
+                        # Read tval/pval from the raw variant (identical
+                        # across every variant by OLS invariance to linear
+                        # rescaling of X and/or y)
+                        tval_file = '{0}/{1}_{2}.nii.gz'.format(tval_dir, tract_name, factor_str)
+                        pval_file = '{0}/{1}_{2}.nii.gz'.format(pval_dir, tract_name, factor_str)
+                        fdrpval_file = '{0}/fdr_{1}_{2}.nii.gz'.format(pval_dir, tract_name, factor_str)
                         V_tval = nib.load(tval_file).get_fdata().flatten()
                         V_tval_abs = np.abs(V_tval)
                         V_pval = nib.load(pval_file).get_fdata().flatten()
                         V_fdrpval = nib.load(fdrpval_file).get_fdata().flatten()
-                        V_coef = nib.load(coef_file).get_fdata().flatten()
+
+                        # coef, per variant ('' = raw/natural-units, plus one
+                        # per general.effect_scales scheme) -- only variants
+                        # whose coef file actually exists are included, so
+                        # configs without an effect_scales block behave
+                        # exactly as before (just the raw '|coef' column).
+                        V_coef_variants = {}
+                        for suf in variant_sufs:
+                            coef_file = '{0}/{1}_{2}{3}.nii.gz'.format(coef_dir, tract_name, factor_str, suf)
+                            if os.path.isfile(coef_file):
+                                V_coef_variants[suf] = nib.load(coef_file).get_fdata().flatten()
 
                         # Get residuals (can change for each factor if metric == 'max')
                         summary_resids = np.zeros((Nd, N_sub))
@@ -521,7 +597,6 @@ class DwiTractsGlm:
                             idx_d = np.flatnonzero(V_dist==d)
                             idx_flat = np.unravel_index(idx_d, img_shape)
                             resids = V_resids[idx_flat[0],idx_flat[1],idx_flat[2],:]
-#                             print('Shape: {0}'.format(resids.shape))
 
                             summary = 0
                             if idx_d.size > 0:
@@ -540,9 +615,8 @@ class DwiTractsGlm:
                                 else:
                                     print('Error: "{0}" is not a valid summary metric'.format(metric))
                                     assert(False)
-                
-                            
-                            summary_resids[i,:] = summary #np.mean(resids.flatten())
+
+                            summary_resids[i,:] = summary
 
                         # Write residuals to file
                         output_file = '{0}/resids_{1}.csv'.format(output_dir, tract_name)
@@ -550,55 +624,59 @@ class DwiTractsGlm:
                                                 header='', comments='', \
                                                 fmt='%1.8f')
 
+                        tvals_col = np.zeros(Nd)
+                        pvals_col = np.zeros(Nd)
+                        fdrpvals_col = np.zeros(Nd)
+                        coef_cols = {suf: np.zeros(Nd) for suf in V_coef_variants}
+
                         # For each distance:
                         for d, i in zip(dists, range(0,dists.size)):
                             # Summarize stat across voxels at this distance (mean, max, median)
                             idx_d = np.flatnonzero(V_dist==d)
-                            
-                            summary = 0
+
                             if idx_d.size > 0:
                                 if metric == 'mean':
-                                    summary_tval = np.mean(V_tval[idx_d])
-                                    summary_pval = np.mean(V_pval[idx_d])
-                                    summary_fdrpval = np.mean(V_fdrpval[idx_d])
-                                    summary_coef = np.mean(V_coef[idx_d])
+                                    tvals_col[i] = np.mean(V_tval[idx_d])
+                                    pvals_col[i] = np.mean(V_pval[idx_d])
+                                    fdrpvals_col[i] = np.mean(V_fdrpval[idx_d])
+                                    for suf, V_coef in V_coef_variants.items():
+                                        coef_cols[suf][i] = np.mean(V_coef[idx_d])
 
                                 elif metric == 'max':
                                     # Weight by P(tract)
                                     weights = np.power(V_tract[idx_d], params_trace['max_weight_factor'])
                                     wt_tvals = np.abs(np.multiply(weights, V_tval[idx_d]))
                                     idx_max = idx_d[np.argmax(wt_tvals)]
-                                    summary_tval = V_tval[idx_max]
-                                    summary_pval = V_pval[idx_max]
-                                    summary_fdrpval = V_fdrpval[idx_max]
-                                    summary_coef = V_coef[idx_max]
+                                    tvals_col[i] = V_tval[idx_max]
+                                    pvals_col[i] = V_pval[idx_max]
+                                    fdrpvals_col[i] = V_fdrpval[idx_max]
+                                    for suf, V_coef in V_coef_variants.items():
+                                        coef_cols[suf][i] = V_coef[idx_max]
 
                                 elif metric == 'median':
-                                    summary_tval = np.median(V_tval[idx_d])
-                                    summary_pval = np.median(V_pval[idx_d])
-                                    summary_fdrpval = np.median(V_fdrpval[idx_d])
-                                    summary_coef = np.median(V_coef[idx_d])
+                                    tvals_col[i] = np.median(V_tval[idx_d])
+                                    pvals_col[i] = np.median(V_pval[idx_d])
+                                    fdrpvals_col[i] = np.median(V_fdrpval[idx_d])
+                                    for suf, V_coef in V_coef_variants.items():
+                                        coef_cols[suf][i] = np.median(V_coef[idx_d])
 
                                 else:
                                     print('Error: "{0}" is not a valid summary metric'.format(metric))
                                     assert(False)
 
-                            if np.isnan(summary_tval):
-                                summary_tval = nanval
-                            M[i,j] = summary_coef
-                            M[i,j+1] = summary_tval
-                            M[i,j+2] = summary_pval
-                            M[i,j+3] = summary_fdrpval
+                            if np.isnan(tvals_col[i]):
+                                tvals_col[i] = nanval
 
-                        hdr = '{0},{1}|coef,{1}|tval,{1}|pval,{1}|fdr_pval'.format(hdr,factor_str)
-                        j += 4
+                        csv_cols['{0}|tval'.format(factor_str)] = tvals_col
+                        csv_cols['{0}|pval'.format(factor_str)] = pvals_col
+                        csv_cols['{0}|fdr_pval'.format(factor_str)] = fdrpvals_col
+                        for suf in variant_sufs:
+                            if suf in coef_cols:
+                                csv_cols['{0}|coef{1}'.format(factor_str, suf)] = coef_cols[suf]
 
-                    # Write Nd x Ns matrix to CSV file
+                    # Write to CSV file
                     output_file = '{0}/stats_{1}.csv'.format(output_dir, tract_name)
-
-                    np.savetxt(output_file, M, delimiter=',', \
-                                            header=hdr, comments='', \
-                                            fmt=formats)
+                    pd.DataFrame(csv_cols).to_csv(output_file, index=False)
 
                     if verbose:
                         print('   Done {0}'.format(glm) )
@@ -1120,9 +1198,28 @@ class DwiTractsGlm:
             if verbose:
                 print( glm )
             
-            glm_dir = '{0}/glms/{1}'.format(self.tracts_dir, glm)
+            # Was hardcoded to 'glms' (not params_gen['glm_output_dir'], unlike
+            # fit_glms/extract_distance_traces above) -- meant this function
+            # silently read from the wrong directory whenever glm_output_dir
+            # was overridden from its default (as the corrected-eddy pipeline
+            # does, to avoid colliding with the pre-correction GLM results).
+            # Found 2026-08-11: "No output for X. Skipping." for every
+            # tract/factor -> denom stayed 0 -> ZeroDivisionError.
+            glm_dir = '{0}/{1}/{2}'.format(self.tracts_dir, params_gen['glm_output_dir'], glm)
             output_dir = '{0}/summary-{1}_thr{2}'.format(glm_dir, metric, thresh_str)
-            polyline_dir = '{0}/polylines/rft'.format(self.tracts_dir)
+            # NB: namespaced by glm name, not just self.tracts_dir - this is a
+            # pre-existing latent bug fix: two different GLMs against the same
+            # network (e.g. different DTI metrics run through the same tract
+            # geometry) previously wrote/overwrote the exact same
+            # polylines/rft/tvals_rft_<tract>_<factor>_<thresh>.poly3d files,
+            # since that filename never encoded which GLM it came from. This
+            # only matters once more than one glm_name is ever run against the
+            # same network_dir - which the FA/MD/RD metric support now makes
+            # a real scenario. plot_fornix_ba35_results_v4.py's rft_dir
+            # resolution knows to check this glm-scoped path first, falling
+            # back to the old flat path for any output generated before this
+            # change.
+            polyline_dir = '{0}/polylines/rft/{1}'.format(self.tracts_dir, glm)
             pval_output_dir = '{0}/pval-rft_thr{1}'.format(glm_dir, thresh_str)
             tval_output_dir = '{0}/tval-rft_thr{1}'.format(glm_dir, thresh_str)
             
@@ -1165,7 +1262,9 @@ class DwiTractsGlm:
                 tvals_all = {}
                 tvals_nt_all = {}
                 pvals_all = {}
+                logpvals_all = {}
                 clusters_all = {}
+                coefs_all = {}
                 
                 # For permutation test
                 tvals_perm = {}
@@ -1216,19 +1315,42 @@ class DwiTractsGlm:
                         
                     T = pd.read_csv(stats_file)
                     tvals = T['{0}|tval'.format(factor_str)].values
+                    # Every coef variant present for this factor: '' (raw,
+                    # natural units) plus one per general.effect_scales
+                    # scheme, e.g. "{factor}|coef", "{factor}|coef_std",
+                    # "{factor}|coef_std_binary" -- whichever columns
+                    # extract_distance_traces() actually wrote.
+                    coef_prefix = '{0}|coef'.format(factor_str)
+                    coefs_variants = {col[len(coef_prefix):]: T[col].values
+                                      for col in T.columns
+                                      if col == coef_prefix or col.startswith(coef_prefix + '_')}
                     tvals_abs = np.abs(tvals)
                     t_max = np.max(tvals_abs)
                     N_nodes = tvals.size
-                    
-                    pvals, clusters = utils.get_tvalue_rft1d_clusters( tvals, alpha, df, mean_FWHM, min_clust )
+
+                    pvals, clusters, logpvals = utils.get_tvalue_rft1d_clusters( tvals, alpha, df, mean_FWHM, min_clust )
 
                     tvals_nt = tvals.copy()
+                    # get_tvalue_rft1d_clusters labels every cluster that meets the
+                    # minimum extent, even one whose own RFT p-value doesn't clear
+                    # alpha -- significance is only actually enforced by zeroing
+                    # tvals below. Zero the matching cluster label at the same time,
+                    # so 'clusters' stays the single source of truth for "which
+                    # points form one live significant cluster" everywhere it's used
+                    # downstream (stats_<tract>.csv, the RFT poly3d trace, and the
+                    # plotting side's cluster segmentation) instead of a second,
+                    # disagreeing signal that a caller could forget to intersect
+                    # with tvals_thr!=0.
+                    clusters[pvals > alpha] = 0
                     tvals[pvals > alpha] = 0
-                    
+                    logpvals[clusters == 0] = 0.0
+
                     tvals_all[tract_name] = tvals
                     tvals_nt_all[tract_name] = tvals_nt
                     pvals_all[tract_name] = pvals
+                    logpvals_all[tract_name] = logpvals
                     clusters_all[tract_name] = clusters
+                    coefs_all[tract_name] = coefs_variants
 
                     tracts_found.append(tract_name)
 
@@ -1268,6 +1390,17 @@ class DwiTractsGlm:
                         pvals_all[tract_name][cluster==clusters[i]] = pvals_fdr[i]
                         if not sig_fdr[i]:
                             tvals_all[tract_name][cluster==clusters[i]] = 0
+                            # Zero the cluster label too, not just tvals -- otherwise
+                            # an FDR-rejected cluster keeps its original nonzero ID
+                            # forever, and downstream code that treats 'clusters'
+                            # (written to stats_<tract>.csv and the RFT poly3d trace)
+                            # as the single source of truth for "which contiguous
+                            # points form one significant cluster" -- rather than
+                            # re-deriving groups from tvals_thr!=0, a second,
+                            # potentially-inconsistent signal -- would wrongly still
+                            # count it as a live cluster.
+                            clusters_all[tract_name][cluster==clusters[i]] = 0
+                            logpvals_all[tract_name][cluster==clusters[i]] = 0.0
 
                 has_sig[factor] = []
                 tcounts_pos[factor] = {}
@@ -1281,20 +1414,26 @@ class DwiTractsGlm:
                 tmax_pos[factor] = {}
                 tmax_neg[factor] = {}
                 tmean_all_pos[factor] = {}
-                tmean_all_neg[factor] = {}        
-                        
+                tmean_all_neg[factor] = {}
+
                 for tract_name in tqdm_notebook(tracts_found,'Saving results'):
-                    
+
                     pvals = pvals_all[tract_name]
                     tvals = tvals_all[tract_name]
                     tvals_nt = tvals_nt_all[tract_name]
                     clusters = clusters_all[tract_name]
-                    
+                    logpvals = logpvals_all[tract_name]
+                    coefs = coefs_all[tract_name]
+
                     # Append results to CSV file
                     stats_file = '{0}/stats_{1}.csv'.format(output_dir, tract_name)
                     T = pd.read_csv(stats_file)
                     T['{0}|rft_pval'.format(factor_str)] = pvals
                     T['{0}|rft_clusters'.format(factor_str)] = clusters
+                    # Exact natural-log p-value (see utils.get_cluster_logp_rft1d) --
+                    # 0.0 wherever there's no live cluster, otherwise finite and exact
+                    # even where rft_pval itself has underflowed to exactly 0.0.
+                    T['{0}|rft_logpval'.format(factor_str)] = logpvals
                     T.to_csv(stats_file, index=False)
 
                     # Write volume files
@@ -1344,42 +1483,54 @@ class DwiTractsGlm:
                         if np.sum(-tvals_nt[tvals_nt<0]) > 0:
                             tmean_all_neg[factor][tract_name] = np.mean(-tvals_nt[tvals_nt<0])
 
-                    # Make new polyline from bidirectional distance volume
-                    # Polyline vertices are maximal tract values at each distance
-                    if use_norm:
-                        tract_file = '{0}/tract_final_norm_bidir_{1}.nii.gz'.format(final_dir, tract_name)
-                    else:
-                        tract_file = '{0}/tract_final_bidir_{1}.nii.gz'.format(final_dir, tract_name)
-                    V_img = nib.load(tract_file)
-                    M = V_img.affine
-                    V_tract = V_img.get_fdata()
-                    V_dist[V_tract < tract_thresh] = 0
-                    polyline = np.ones((dists.size,4))
-                    idx_ok = np.zeros(dists.size, dtype=bool)
-                    
-                    V_dist = V_dist.flatten()
-                    V_tract = V_tract.flatten()
-                    
-                    for d, i in zip(dists, range(0,dists.size)):
-                        idx_d = np.flatnonzero(V_dist==d)
-                        V_t = V_tract[idx_d]
-                        if np.any(idx_d):
-                            idx_mx = np.unravel_index(idx_d[np.argmax(V_t)], V_img.shape)
-                            polyline[i,0:3] = np.asarray(idx_mx)
-                            idx_ok[i] = True
+                    # Place each distance-shell's stats directly on the
+                    # tract's own known geometry (polylines/maxes_<pair>_
+                    # sm3.poly3d -- written for every tract, real or
+                    # alternate-route, since 2026-08-17) rather than
+                    # re-deriving an approximate path via the tract-mask
+                    # intensity argmax within each shell. That argmax
+                    # reconstruction is biased toward wherever the
+                    # (density-weighted) mask is strongest in each
+                    # cross-section, which visibly diverges from the true
+                    # polyline for a route fit through lower-density
+                    # territory (e.g. an alternate "medial" route) even
+                    # though it coincides closely for a route that stays
+                    # near the density ridge. See utils.
+                    # resample_polyline_by_distance for the mapping.
+                    roi_a = next(r for r in self.rois if tract_name.startswith(r + '_')
+                                and tract_name[len(r) + 1:] in self.target_rois[r])
+                    roi_b = tract_name[len(roi_a) + 1:]
+                    poly_file = '{0}/polylines/maxes_{1}_{2}_sm3.poly3d'.format(self.tracts_dir, roi_a, roi_b)
+                    actual_poly = utils.read_polyline_mgui(poly_file)
+                    polyline = utils.resample_polyline_by_distance(actual_poly, dists)
 
-                    # Save to polyline file
-                    T = np.transpose(np.stack((tvals_nt,tvals,pvals)))
-                    polyline = polyline[idx_ok,:]
-                    polyline = np.matmul(M,polyline.T).T
-                    polyline = polyline[:,0:3]
-                    polyline = utils.smooth_polyline_ma(polyline, window=7)
-                    T = T[idx_ok,:]
-                    
-                    data_names = ['tvals','tvals_thr','pvals']
+                    # Save to polyline file -- one 'coef<suf>' column per
+                    # effect-size variant found (raw '' -> plain 'coef',
+                    # plus one per general.effect_scales scheme), so the
+                    # plotting side can colour by whichever one it likes
+                    # (stat="coef", stat="coef_std", stat="coef_std_binary", ...).
+                    # 'clusters' carries the true RFT cluster labels (positive
+                    # and negative clusters always get distinct labels - see
+                    # utils.get_tvalue_rft1d_clusters, which runs separate
+                    # calc_pos/calc_neg passes) so the plotting side can split
+                    # significant runs at label boundaries instead of just at
+                    # zero/nonzero transitions - two label-adjacent clusters of
+                    # opposite sign would otherwise get merged into one run by
+                    # a naive nonzero-contiguity check, averaging their t/coef
+                    # toward zero.
+                    coef_suffixes = sorted(coefs.keys())
+                    T = np.transpose(np.stack([tvals_nt, tvals, pvals, clusters.astype(float), logpvals] + [coefs[s] for s in coef_suffixes]))
+                    data_names = ['tvals', 'tvals_thr', 'pvals', 'clusters', 'logpvals'] + ['coef{0}'.format(s) for s in coef_suffixes]
                     polyline_file = '{0}/tvals_rft_{1}_{2}_{3}.poly3d' \
                                     .format(polyline_dir, tract_name, factor_str, thresh_str)
-                    utils.write_polyline_mgui(polyline, polyline_file, factor_str, T, data_names)
+                    # RFT cluster p-values can be far smaller than the default
+                    # fixed 6-decimal-place format can represent (anything below
+                    # ~5e-7 would silently round to exactly 0.0, indistinguishable
+                    # on read-back from "genuinely underflowed"). Write pvals in
+                    # scientific notation so the figures' p-value annotations
+                    # reflect the actual computed precision, not a formatting floor.
+                    utils.write_polyline_mgui(polyline, polyline_file, factor_str, T, data_names,
+                                               data_formats={'pvals': '{0:.6e}'})
                     
             print('   Wrote volumes & polylines.')
 
