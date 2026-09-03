@@ -1,0 +1,140 @@
+{
+ "general": {
+  "preproc_config_file": "project/qa_diag/route_v2_configs/nonbdp461/config_preprocess_lateral.json",
+  "tracts_config_file": "project/qa_diag/route_v2_configs/nonbdp461/config_tracts_lateral_nonbdp461_LR_v2.json",
+  "covariates_file": "project/covariates_basic.csv",
+  "subjects_file": "project/qa_diag/lc_ba35_nonbdp_478_8_24.list",
+  "standardized_beta": true,
+  "glm_output_dir": "glms_nonbdp_lateral_v2_LR",
+  "tract_threshold": 0.4,
+  "snet_output_dir": "snet",
+  "summary_metric": "max",
+  "min_clust": 3,
+  "fdr_alpha": 0.05,
+  "fdr_method": "fdr_tsbky",
+  "nan_value": 0,
+  "clobber": true,
+  "dryrun": false,
+  "verbose": true,
+  "effect_scales": {
+   "std": {
+    "AGE": 10
+   },
+   "std_binary": {
+    "AGE": 10,
+    "_categorical_default": "zscore"
+   }
+  }
+ },
+ "glm": {
+  "glm-lc-ba35-lateral-v2-LR": {
+   "factors": [
+    "AGE",
+    "FEMALE",
+    "AD",
+    "MCI"
+   ],
+   "categorical": {
+    "AGE": false,
+    "FEMALE": true,
+    "AD": true,
+    "MCI": true,
+    "CN": true
+   },
+   "levels": {
+    "FEMALE": {
+     "Male": "0",
+     "Female": "1"
+    },
+    "AD": {
+     "No dementia": "0",
+     "Probable AD": "1"
+    },
+    "MCI": {
+     "No MCI": "0",
+     "MCI": "1"
+    }
+   },
+   "intercept": true,
+   "outlier_z": 3.5
+  }
+ },
+ "traces": {
+  "tract_threshold": 0.5,
+  "cluster_alpha": 0.01,
+  "fdr_method": "fdr_tsbky",
+  "fdr_alpha": 0.05,
+  "pval_alpha": 0.05,
+  "plot_permutations": true,
+  "n_permutations": 5000,
+  "max_weight_factor": 1
+ },
+ "space-net": {
+  "eps": 0.1,
+  "memory": "nilearn_cache",
+  "penalty": "graph-net",
+  "cv": 3
+ },
+ "plots": {
+  "chord": {
+   "show_title": false,
+   "colormap": "viridis",
+   "replace_text": "",
+   "min_tcount": 2
+  }
+ },
+ "figures": {
+  "network_label": "LC-BA35lateral (461, v2 routes)",
+  "tracts_dir": "/share/ConnLS/ADNI/tract_stats_nonbdp_thr007",
+  "network_dir": "LC-BA35-lateral-nonbdp-thr007",
+  "color": "#31a354",
+  "pairs_2": [
+   [
+    "LC_L",
+    "BA35_L"
+   ],
+   [
+    "LC_R",
+    "BA35_R"
+   ]
+  ],
+  "pairs_3": [
+   [
+    "L",
+    "LC_L",
+    "BA35_L"
+   ],
+   [
+    "R",
+    "LC_R",
+    "BA35_R"
+   ]
+  ],
+  "compare_label": "TSA_lateral_v2_LR"
+ },
+ "profiles": {
+  "resample_step_mm": 0.5,
+  "max_weight_factor": 1.0,
+  "n_permutations": 5000,
+  "cluster_forming_p": 0.01,
+  "two_tailed": true,
+  "tfce": false,
+  "permutation_scheme": "freedman_lane",
+  "permutation_family": "tract",
+  "permutation_seed": 0,
+  "min_clust": 3,
+  "pval_alpha": 0.05,
+  "fdr_method": "none",
+  "fdr_alpha": 0.05,
+  "write_voxel_maps": false,
+  "output_dir": "profiles_floodfill_metricfirst_wmean_core07",
+  "shell_scheme": "flood_fill",
+  "trace_construction": "metric_first",
+  "inference_method": [
+   "rft",
+   "nonparam"
+  ],
+  "profile_aggregation": "wmean",
+  "profile_core_threshold": 0.7
+ }
+}
