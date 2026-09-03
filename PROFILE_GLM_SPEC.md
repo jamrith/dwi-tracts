@@ -394,9 +394,9 @@ Two configs, four method trees, all rendered through the normal figure set:
 
 | config | output_dir | shells | trace | inference | wall |
 |---|---|---|---|---|---|
-| `config_profiles_lateral_v2_LR.json` | `profiles_arclen_metricfirst_wmean` | length-prop 2.5 mm | metric-first `wmean` | rft, nonparam | 1m50 |
-| `config_profiles_lateral_v2_LR_voxelwise.json` | `profiles_floodfill_voxelwise_max` | flood-fill | voxelwise `max` | rft, permutation (5000) | 5m26 |
-| `config_profiles_lateral_v2_LR_max.json` | `profiles_arclen_metricfirst_max` | length-prop 2.5 mm | metric-first `max` | rft, nonparam | 1m50 |
+| `config_profiles_lateral_v2_LR_arclen_metricfirst_wmean.json` | `profiles_arclen_metricfirst_wmean` | length-prop 2.5 mm | metric-first `wmean` | rft, nonparam | 1m50 |
+| `config_profiles_lateral_v2_LR_floodfill_voxelwise_max.json` | `profiles_floodfill_voxelwise_max` | flood-fill | voxelwise `max` | rft, permutation (5000) | 5m26 |
+| `config_profiles_lateral_v2_LR_arclen_metricfirst_max.json` | `profiles_arclen_metricfirst_max` | length-prop 2.5 mm | metric-first `max` | rft, nonparam | 1m50 |
 
 Figures: `run_profiles_figures.py <config>` → one tree per method under
 `{output_dir}/{glm}__{output_dir}_{sfx}/figures/`, plus per-method
@@ -495,6 +495,14 @@ join the two sides with. Widening to 4 mm merely coarsens past the gap.
     profiles_arclen_metricfirst_max
     profiles_floodfill_voxelwise_max
 
+Config filenames follow the same rule, so a config and the tree it writes are
+the same string: `project/config_profiles_{network}_{tree}.json` where
+`{tree}` is `output_dir` minus its `profiles_` prefix — e.g.
+`config_profiles_lateral_v2_LR_arclenfine_metricfirst_wmean_core07.json` ->
+`profiles_arclenfine_metricfirst_wmean_core07`. (The exception is
+`config_profiles_cb_native_sample.json`, the worked example for a different
+network, which is named for the network rather than the knobs.)
+
 The inference method is *below* that level in every case (`tcounts-rft.csv` /
 `tcounts-np.csv` / `tcounts-perm.csv`, `pval-{sfx}_thr{NN}/`, and the
 `{glm}__{output_dir}_{sfx}/figures/` trees), so one tree carries every method
@@ -575,8 +583,11 @@ which confounds the two knobs: any difference could be either. §6 says the
 knobs are independent, so both off-diagonal cells were run to break the
 confound:
 
-    profiles_arclen_voxelwise_max          (config_..._arclen_vox.json)      5m19
-    profiles_floodfill_metricfirst_wmean   (config_..._floodfill_mf.json)    1m50
+    profiles_arclen_voxelwise_max          5m19
+    profiles_floodfill_metricfirst_wmean   1m50
+
+(each tree's config is project/config_profiles_lateral_v2_LR_<tree>.json,
+where <tree> is the output_dir minus its "profiles_" prefix -- see 13.1)
 
 `n_sig/K`, best cluster p, **valid inference only** — `permutation` for the
 voxelwise cells, `nonparam` for the metric-first cells:
