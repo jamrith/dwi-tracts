@@ -4,8 +4,10 @@ make_final_tsa_avrdir_3d_html.py
 All-tract version of plot_tract_tsa_avrdir.py's "avrdir glyphs by TSA" layer:
 one whisker per tract voxel, centred on the voxel and aligned with the
 group-average local orientation (avrdir/avrdir_<tract>), coloured by the
-group-mean TSA (tsa_avr/tsa_avr_<tract>) on ONE shared colour scale, so
-tracts are directly comparable. ROIs (with toggleable labels), routes
+group-mean TSA (tsa_avr/tsa_avr_<tract>). By default the colour range is
+the 2-98th TSA percentile of the tracts currently shown (legend clicks
+rescale it); a "Colour range" toggle switches to one fixed range shared by
+all tracts. ROIs (with toggleable labels), routes
 (hidden by default) and an MNI152 glass brain give context.
 
 Voxels: tract_final_bidir_<tract> >= 0.1, the same mask that defines the
@@ -27,6 +29,70 @@ import final_3d_common as fc
 OUT_HTML = os.path.join(fc.OUT_DIR, "final_tsa_avrdir_3d.html")
 TRACT_THRESHOLD = 0.1
 COLORSCALE = "Viridis"
+WHISKER_META = "tsa-whisker"
+RANGE_PCT = (2, 98)
+
+# "Colour range" toggle: "Shown tracts" rescales cmin/cmax of every whisker
+# trace to the RANGE_PCT percentiles of the TSA values of the whisker traces
+# currently visible (updated on every legend click); "All tracts" restores
+# the fixed shared range. The colorbar follows the first visible tract.
+_AUTO_RANGE_JS = r"""
+(function () {
+  var gd = document.getElementById('{plot_id}');
+  var META = '%(meta)s', LO = %(lo)s, HI = %(hi)s;
+  var mode = 'shown', busy = false, allRange = null;
+  function whiskers() {
+    var idx = [];
+    gd.data.forEach(function (t, i) { if (t.meta === META) idx.push(i); });
+    return idx;
+  }
+  function pct(sorted, q) {
+    var pos = (sorted.length - 1) * q / 100, lo = Math.floor(pos), hi = Math.ceil(pos);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+  }
+  function rangeOf(idx) {
+    var vals = [];
+    idx.forEach(function (i) {
+      Array.prototype.forEach.call(gd.data[i].line.color, function (v) {
+        if (v !== null && isFinite(v)) vals.push(+v);
+      });
+    });
+    if (!vals.length) return null;
+    vals.sort(function (a, b) { return a - b; });
+    return [pct(vals, LO), pct(vals, HI)];
+  }
+  function update() {
+    var idx = whiskers();
+    var shown = idx.filter(function (i) { return gd.data[i].visible === undefined || gd.data[i].visible === true; });
+    if (!allRange) allRange = rangeOf(idx);
+    var rng = (mode === 'shown' ? rangeOf(shown) : null) || allRange;
+    var first = shown.length ? shown[0] : idx[0];
+    busy = true;
+    Plotly.restyle(gd, {'line.cmin': rng[0], 'line.cmax': rng[1],
+                        'line.showscale': idx.map(function (i) { return i === first; })}, idx)
+      .then(function () { busy = false; label.textContent = rng[0].toFixed(3) + ' to ' + rng[1].toFixed(3); },
+            function () { busy = false; });
+  }
+  var box = document.createElement('div');
+  box.style.cssText = 'position:fixed;left:10px;top:50px;z-index:1000;' +
+    'background:rgba(255,255,255,0.95);border:1px solid #c8cdd2;border-radius:4px;padding:5px 8px;' +
+    "font:13px 'Nimbus Sans',Helvetica,Arial,sans-serif;color:#111";
+  box.innerHTML = '<b>Colour range</b> ' +
+    '<label><input type="radio" name="cr" value="shown" checked> Shown tracts</label> ' +
+    '<label><input type="radio" name="cr" value="all"> All tracts</label>' +
+    '<div id="cr-label" style="color:#555;margin-top:2px"></div>';
+  document.body.appendChild(box);
+  var label = box.querySelector('#cr-label');
+  Array.prototype.forEach.call(box.querySelectorAll('input'), function (el) {
+    el.addEventListener('change', function () { mode = el.value; update(); });
+  });
+  gd.on('plotly_restyle', function (ev) {
+    if (busy || !ev || !ev[0] || !('visible' in ev[0])) return;
+    update();
+  });
+  update();
+})();
+""" % dict(meta=WHISKER_META, lo=RANGE_PCT[0], hi=RANGE_PCT[1])
 
 
 def load_tract(e):
@@ -78,7 +144,7 @@ def main():
 
     data = [(e, load_tract(e)) for e in fc.TRACTS]
     all_tsa = np.concatenate([d["tsa"] for _, d in data])
-    cmin, cmax = np.percentile(all_tsa, [2, 98])
+    cmin, cmax = np.percentile(all_tsa, RANGE_PCT)
     print("shared TSA colour range {0:.4f}..{1:.4f} over {2} voxels"
           .format(cmin, cmax, len(all_tsa)))
 
@@ -106,7 +172,7 @@ def main():
             hovertemplate=("<b>{0}</b><br>TSA=%{{customdata[0]:.3f}}"
                            "<br>tract weight=%{{customdata[1]:.2f}}<extra></extra>")
             .format(e["group"]),
-            name=e["group"], legendgroup="tsa-" + e["group"],
+            name=e["group"], legendgroup="tsa-" + e["group"], meta=WHISKER_META,
             showlegend=e["group"] not in seen, legend="legend"))
         seen.add(e["group"])
         print(e["tract"], len(keep), "whiskers")
@@ -131,7 +197,8 @@ def main():
         legend3=fc.legend_box("Routes", y=0.30),
         updatemenus=[fc.label_toggle_menu(label_idx)],
         margin=dict(l=0, r=0, t=0, b=0))
-    fc.write_fullscreen_html(fig, args.out_html, view=args.view)
+    fc.write_fullscreen_html(fig, args.out_html, view=args.view,
+                            extra_js=[_AUTO_RANGE_JS])
 
 
 if __name__ == "__main__":

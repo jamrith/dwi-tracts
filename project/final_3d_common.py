@@ -381,7 +381,7 @@ def apply_view(fig, view):
     fig.update_layout(scene=scene)
 
 
-def write_fullscreen_html(fig, out_path, view=None):
+def write_fullscreen_html(fig, out_path, view=None, extra_js=()):
     """Self-contained, full-window HTML with Nimbus Sans embedded and a
     View panel; `view` (from load_view) overrides the default camera."""
     apply_view(fig, view)
@@ -391,7 +391,7 @@ def write_fullscreen_html(fig, out_path, view=None):
                        default_width="100%", default_height="100vh",
                        config={"responsive": True, "displaylogo": False,
                                "toImageButtonOptions": dict(format="png", scale=3)},
-                       post_script=[_FONT_RERENDER_JS, _VIEW_PANEL_JS])
+                       post_script=[_FONT_RERENDER_JS, _VIEW_PANEL_JS] + list(extra_js))
     style = ("<style>{0}\nhtml,body{{margin:0;padding:0;height:100%;overflow:hidden;"
              "background:#fff;font-family:{1};}}</style>").format(_font_face_css(), FONT_STACK)
     html = html.replace("<head>", "<head>\n" + style, 1)
