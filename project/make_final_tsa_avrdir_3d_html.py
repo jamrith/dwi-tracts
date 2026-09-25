@@ -13,7 +13,7 @@ tract-average TSA predictors and the pipeline's along-tract default.
 LC-TEC lateral and medial are separate entries: they overlap but their
 tsa_avr/avrdir maps differ in the shared voxels.
 
-Usage: make_final_tsa_avrdir_3d_html.py [--glyph-spacing MM] [--glyph-length MM] [out.html]
+Usage: make_final_tsa_avrdir_3d_html.py [--view <json|file>] [--glyph-spacing MM] [--glyph-length MM] [out.html]
 """
 import argparse
 import os
@@ -72,6 +72,8 @@ def main():
     ap.add_argument("--glyph-spacing", type=float, default=0.0)
     ap.add_argument("--glyph-length", type=float, default=2.0)
     ap.add_argument("--glyph-width", type=float, default=5.0)
+    ap.add_argument("--view", type=fc.load_view, default=None,
+                    help="camera/box JSON (or file) copied from the HTML View panel")
     args = ap.parse_args()
 
     data = [(e, load_tract(e)) for e in fc.TRACTS]
@@ -129,7 +131,7 @@ def main():
         legend3=fc.legend_box("Routes", y=0.30),
         updatemenus=[fc.label_toggle_menu(label_idx)],
         margin=dict(l=0, r=0, t=0, b=0))
-    fc.write_fullscreen_html(fig, args.out_html)
+    fc.write_fullscreen_html(fig, args.out_html, view=args.view)
 
 
 if __name__ == "__main__":

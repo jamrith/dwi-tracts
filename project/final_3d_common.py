@@ -245,16 +245,153 @@ if (document.fonts && document.fonts.load) {
 }
 """
 
+# "View" panel: live camera (eye = rotation+zoom, center = pan, up, projection)
+# plus the scene box (aspectratio + axis ranges) the camera is relative to.
+# Copy as JSON (for --view / Apply) or as a Python scene dict; paste + Apply
+# restores a view.
+_VIEW_PANEL_JS = r"""
+(function () {
+  var gd = document.getElementById('{plot_id}');
+  var r = function (v) { return Math.round(v * 10000) / 10000; };
+  var p = document.createElement('div');
+  p.style.cssText = 'position:fixed;left:10px;bottom:10px;z-index:1000;' +
+    'background:rgba(255,255,255,0.95);border:1px solid #c8cdd2;border-radius:4px;' +
+    'box-shadow:0 1px 4px rgba(0,0,0,0.15);padding:6px 8px;' +
+    "font:13px 'Nimbus Sans',Helvetica,Arial,sans-serif;color:#111;max-width:420px";
+  p.innerHTML =
+    '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+    '<b style="cursor:pointer" id="vp-toggle">View &#9656;</b>' +
+    '<span id="vp-body-btns" style="display:none;gap:6px">' +
+    '<button id="vp-copy-json">Copy JSON</button>' +
+    '<button id="vp-copy-py">Copy Python</button>' +
+    '<button id="vp-apply">Apply</button>' +
+    '<button id="vp-reset">Reset</button>' +
+    '<span id="vp-msg" style="color:#2e7d32"></span></span></div>' +
+    '<textarea id="vp-text" spellcheck="false" style="display:none;width:400px;height:210px;' +
+    'margin-top:6px;font:11px monospace;white-space:pre"></textarea>';
+  document.body.appendChild(p);
+  var q = function (id) { return p.querySelector('#' + id); };
+  var ta = q('vp-text'), msg = q('vp-msg'), open = false, editing = false;
+  var initial = null;
 
-def write_fullscreen_html(fig, out_path):
-    """Self-contained, full-window HTML with Nimbus Sans embedded."""
+  function view() {
+    var sc = gd._fullLayout.scene, c = sc.camera;
+    var xyz = function (o) { return {x: r(o.x), y: r(o.y), z: r(o.z)}; };
+    var rng = function (a) { return [r(a.range[0]), r(a.range[1])]; };
+    return {camera: {eye: xyz(c.eye), center: xyz(c.center), up: xyz(c.up),
+                     projection: {type: (c.projection && c.projection.type) || 'perspective'}},
+            aspectratio: xyz(sc.aspectratio),
+            xaxis_range: rng(sc.xaxis), yaxis_range: rng(sc.yaxis), zaxis_range: rng(sc.zaxis)};
+  }
+  function pyText(v) {
+    var d = function (o) { return 'dict(x=' + o.x + ', y=' + o.y + ', z=' + o.z + ')'; };
+    return 'scene=dict(\n' +
+      '    camera=dict(eye=' + d(v.camera.eye) + ',\n' +
+      '                center=' + d(v.camera.center) + ',\n' +
+      '                up=' + d(v.camera.up) + ',\n' +
+      "                projection=dict(type='" + v.camera.projection.type + "')),\n" +
+      "    aspectmode='manual', aspectratio=" + d(v.aspectratio) + ',\n' +
+      '    xaxis=dict(range=' + JSON.stringify(v.xaxis_range) + '),\n' +
+      '    yaxis=dict(range=' + JSON.stringify(v.yaxis_range) + '),\n' +
+      '    zaxis=dict(range=' + JSON.stringify(v.zaxis_range) + '))';
+  }
+  function refresh() { if (open && !editing) ta.value = JSON.stringify(view(), null, 2); }
+  function flash(t) { msg.textContent = t; setTimeout(function () { msg.textContent = ''; }, 1500); }
+  function copy(t) {
+    var done = function () { flash('copied'); };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(t).then(done, fallback);
+    } else { fallback(); }
+    function fallback() {
+      var tmp = document.createElement('textarea'); tmp.value = t;
+      document.body.appendChild(tmp); tmp.select();
+      try { document.execCommand('copy'); done(); } catch (e) { flash('select + Ctrl-C'); }
+      document.body.removeChild(tmp);
+    }
+  }
+  function applyView(v) {
+    var u = {};
+    if (v.camera) u['scene.camera'] = v.camera;
+    if (v.aspectratio) { u['scene.aspectmode'] = 'manual'; u['scene.aspectratio'] = v.aspectratio; }
+    ['x', 'y', 'z'].forEach(function (a) {
+      if (v[a + 'axis_range']) u['scene.' + a + 'axis.range'] = v[a + 'axis_range'];
+    });
+    return Plotly.relayout(gd, u);
+  }
+
+  q('vp-toggle').onclick = function () {
+    open = !open;
+    ta.style.display = open ? 'block' : 'none';
+    q('vp-body-btns').style.display = open ? 'inline-flex' : 'none';
+    q('vp-toggle').innerHTML = open ? 'View &#9662;' : 'View &#9656;';
+    refresh();
+  };
+  q('vp-copy-json').onclick = function () { copy(JSON.stringify(view(), null, 2)); };
+  q('vp-copy-py').onclick = function () { copy(pyText(view())); };
+  q('vp-apply').onclick = function () {
+    try { var v = JSON.parse(ta.value); } catch (e) { flash('invalid JSON'); return; }
+    editing = false; applyView(v).then(function () { refresh(); flash('applied'); });
+  };
+  q('vp-reset').onclick = function () {
+    editing = false; applyView(initial).then(function () { refresh(); flash('reset'); });
+  };
+  ta.addEventListener('input', function () { editing = true; });
+  ta.addEventListener('blur', function () { if (!ta.value.trim()) editing = false; });
+  function hook() {
+    if (!gd._fullLayout || !gd._fullLayout.scene) { return setTimeout(hook, 200); }
+    if (!initial) initial = view();
+    gd.on('plotly_relayout', function () { if (!editing) refresh(); });
+    gd.on('plotly_relayouting', function () { if (!editing) refresh(); });
+  }
+  hook();
+})();
+"""
+
+
+def load_view(text_or_path):
+    """Parse a view copied from the HTML "View" panel (JSON string or file)."""
+    import json
+    if text_or_path and os.path.isfile(text_or_path):
+        with open(text_or_path) as f:
+            text_or_path = f.read()
+    return json.loads(text_or_path)
+
+
+def pop_view_arg(argv):
+    """Remove `--view <json|file>` from argv (in place) and return the view."""
+    if "--view" not in argv:
+        return None
+    i = argv.index("--view")
+    value = argv[i + 1]
+    del argv[i:i + 2]
+    return load_view(value)
+
+
+def apply_view(fig, view):
+    """Set the scene camera and, if present, the pinned box (aspectratio,
+    axis ranges) from a View-panel JSON, so the view reproduces exactly."""
+    if not view:
+        return
+    scene = dict(camera=view["camera"])
+    if "aspectratio" in view:
+        scene.update(aspectmode="manual", aspectratio=view["aspectratio"])
+    for a in "xyz":
+        if a + "axis_range" in view:
+            scene[a + "axis"] = dict(range=view[a + "axis_range"])
+    fig.update_layout(scene=scene)
+
+
+def write_fullscreen_html(fig, out_path, view=None):
+    """Self-contained, full-window HTML with Nimbus Sans embedded and a
+    View panel; `view` (from load_view) overrides the default camera."""
+    apply_view(fig, view)
     fig.update_layout(font=dict(family=FONT_STACK, size=BASE_FONT_SIZE, color="#111111"),
                       paper_bgcolor="white", autosize=True)
     html = fig.to_html(include_plotlyjs=True, full_html=True,
                        default_width="100%", default_height="100vh",
                        config={"responsive": True, "displaylogo": False,
                                "toImageButtonOptions": dict(format="png", scale=3)},
-                       post_script=_FONT_RERENDER_JS)
+                       post_script=[_FONT_RERENDER_JS, _VIEW_PANEL_JS])
     style = ("<style>{0}\nhtml,body{{margin:0;padding:0;height:100%;overflow:hidden;"
              "background:#fff;font-family:{1};}}</style>").format(_font_face_css(), FONT_STACK)
     html = html.replace("<head>", "<head>\n" + style, 1)

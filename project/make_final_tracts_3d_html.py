@@ -11,7 +11,7 @@ Definitive interactive 3D figure of every final tract (MNI space):
   - MNI152 glass brain for context
 Three legends (routes / shells / ROIs); L and R hemispheres share an entry.
 
-Usage: make_final_tracts_3d_html.py [out.html]
+Usage: make_final_tracts_3d_html.py [--view <json|file>] [out.html]
 """
 import os
 import sys
@@ -24,6 +24,7 @@ OUT_HTML = os.path.join(fc.OUT_DIR, "final_tracts_3d.html")
 
 
 def main():
+    view = fc.pop_view_arg(sys.argv)
     out_html = sys.argv[1] if len(sys.argv) > 1 else OUT_HTML
     fig = go.Figure()
     fc.add_brain(fig, go, legend="legend3")
@@ -61,7 +62,7 @@ def main():
         legend3=fc.legend_box("ROIs", y=0.40),
         updatemenus=[fc.label_toggle_menu(label_idx)],
         margin=dict(l=0, r=0, t=0, b=0))
-    fc.write_fullscreen_html(fig, out_html)
+    fc.write_fullscreen_html(fig, out_html, view=view)
 
 
 if __name__ == "__main__":

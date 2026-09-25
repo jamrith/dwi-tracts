@@ -7,7 +7,7 @@ each label at each voxel, >= GROUP_THRESHOLD) in MNI space, one toggleable
 mesh per subfield (L+R together), with toggleable per-hemisphere labels.
 BA35 is labelled TEC. Nimbus Sans throughout.
 
-Usage: make_ashs_average_3d_html.py [ashs_mni_batch_dir] [out.html]
+Usage: make_ashs_average_3d_html.py [--view <json|file>] [ashs_mni_batch_dir] [out.html]
   ashs_mni_batch_dir holds <session>_ashs_mni.nii.gz for every session in
   its ok_sessions.list (warp_ashs_to_mni_batch.py output).
 """
@@ -59,6 +59,7 @@ def build_group_probability(batch_dir, sessions):
 
 
 def main():
+    view = fc.pop_view_arg(sys.argv)
     batch_dir = sys.argv[1] if len(sys.argv) > 1 else BATCH_DIR
     out_html = sys.argv[2] if len(sys.argv) > 2 else OUT_HTML
     with open(os.path.join(batch_dir, "ok_sessions.list")) as f:
@@ -96,7 +97,7 @@ def main():
                              .format(n, GROUP_THRESHOLD), y=0.99),
         updatemenus=[fc.label_toggle_menu(label_idx)],
         margin=dict(l=0, r=0, t=0, b=0))
-    fc.write_fullscreen_html(fig, out_html)
+    fc.write_fullscreen_html(fig, out_html, view=view)
 
 
 if __name__ == "__main__":
