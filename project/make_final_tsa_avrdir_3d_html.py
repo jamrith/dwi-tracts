@@ -32,14 +32,15 @@ COLORSCALE = "Viridis"
 WHISKER_META = "tsa-whisker"
 RANGE_PCT = (2, 98)
 
-# "Colour range" toggle: "Shown tracts" rescales cmin/cmax of every whisker
+# Controls box. "Whisker width" slider restyles line.width of every whisker
+# trace. "Colour range" toggle: "Shown tracts" rescales cmin/cmax of every whisker
 # trace to the RANGE_PCT percentiles of the TSA values of the whisker traces
 # currently visible (updated on every legend click); "All tracts" restores
 # the fixed shared range. The colorbar follows the first visible tract.
 _AUTO_RANGE_JS = r"""
 (function () {
   var gd = document.getElementById('{plot_id}');
-  var META = '%(meta)s', LO = %(lo)s, HI = %(hi)s;
+  var META = '%(meta)s', LO = %(lo)s, HI = %(hi)s, WIDTH = %(width)s;
   var mode = 'shown', busy = false, allRange = null;
   function whiskers() {
     var idx = [];
@@ -80,11 +81,21 @@ _AUTO_RANGE_JS = r"""
   box.innerHTML = '<b>Colour range</b> ' +
     '<label><input type="radio" name="cr" value="shown" checked> Shown tracts</label> ' +
     '<label><input type="radio" name="cr" value="all"> All tracts</label>' +
-    '<div id="cr-label" style="color:#555;margin-top:2px"></div>';
+    '<div id="cr-label" style="color:#555;margin-top:2px"></div>' +
+    '<div style="margin-top:4px"><b>Whisker width</b> ' +
+    '<input id="ww" type="range" min="1" max="20" step="0.5" value="' + WIDTH + '" ' +
+    'style="vertical-align:middle;width:130px"> <span id="ww-val">' + WIDTH + ' px</span></div>';
   document.body.appendChild(box);
   var label = box.querySelector('#cr-label');
-  Array.prototype.forEach.call(box.querySelectorAll('input'), function (el) {
+  Array.prototype.forEach.call(box.querySelectorAll('input[name=cr]'), function (el) {
     el.addEventListener('change', function () { mode = el.value; update(); });
+  });
+  var ww = box.querySelector('#ww'), wwVal = box.querySelector('#ww-val');
+  ww.addEventListener('input', function () {
+    wwVal.textContent = ww.value + ' px';
+    busy = true;
+    Plotly.restyle(gd, {'line.width': +ww.value}, whiskers())
+      .then(function () { busy = false; }, function () { busy = false; });
   });
   gd.on('plotly_restyle', function (ev) {
     if (busy || !ev || !ev[0] || !('visible' in ev[0])) return;
@@ -92,7 +103,7 @@ _AUTO_RANGE_JS = r"""
   });
   update();
 })();
-""" % dict(meta=WHISKER_META, lo=RANGE_PCT[0], hi=RANGE_PCT[1])
+"""
 
 
 def load_tract(e):
@@ -198,7 +209,9 @@ def main():
         updatemenus=[fc.label_toggle_menu(label_idx)],
         margin=dict(l=0, r=0, t=0, b=0))
     fc.write_fullscreen_html(fig, args.out_html, view=args.view,
-                            extra_js=[_AUTO_RANGE_JS])
+                            extra_js=[_AUTO_RANGE_JS % dict(
+                                meta=WHISKER_META, lo=RANGE_PCT[0], hi=RANGE_PCT[1],
+                                width=args.glyph_width)])
 
 
 if __name__ == "__main__":
