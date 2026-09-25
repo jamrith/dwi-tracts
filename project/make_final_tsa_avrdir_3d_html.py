@@ -85,6 +85,7 @@ _AUTO_RANGE_JS = r"""
     '<div style="margin-top:4px"><b>Whisker width</b> ' +
     '<input id="ww" type="range" min="1" max="20" step="0.5" value="' + WIDTH + '" ' +
     'style="vertical-align:middle;width:130px"> <span id="ww-val">' + WIDTH + ' px</span></div>';
+  box.className = 'ui-panel';
   document.body.appendChild(box);
   var label = box.querySelector('#cr-label');
   Array.prototype.forEach.call(box.querySelectorAll('input[name=cr]'), function (el) {

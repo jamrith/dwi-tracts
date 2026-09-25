@@ -269,6 +269,7 @@ _VIEW_PANEL_JS = r"""
     '<span id="vp-msg" style="color:#2e7d32"></span></span></div>' +
     '<textarea id="vp-text" spellcheck="false" style="display:none;width:400px;height:210px;' +
     'margin-top:6px;font:11px monospace;white-space:pre"></textarea>';
+  p.className = 'ui-panel';
   document.body.appendChild(p);
   var q = function (id) { return p.querySelector('#' + id); };
   var ta = q('vp-text'), msg = q('vp-msg'), open = false, editing = false;
@@ -348,6 +349,49 @@ _VIEW_PANEL_JS = r"""
 """
 
 
+# "Hide UI" (button bottom-right, or the H key): hides every legend, the
+# layout buttons, the HTML panels (class ui-panel) and the plotly modebar,
+# leaving the scene, axes and colorbar. The button fades out while hidden
+# but stays clickable in the same corner.
+_UI_TOGGLE_JS = r"""
+(function () {
+  var gd = document.getElementById('{plot_id}');
+  var css = document.createElement('style');
+  document.head.appendChild(css);
+  var btn = document.createElement('button');
+  btn.style.cssText = 'position:fixed;right:10px;bottom:10px;z-index:1001;' +
+    "font:13px 'Nimbus Sans',Helvetica,Arial,sans-serif;padding:4px 8px;cursor:pointer;" +
+    'background:rgba(255,255,255,0.95);border:1px solid #c8cdd2;border-radius:4px;' +
+    'transition:opacity 0.2s';
+  document.body.appendChild(btn);
+  var shown = true;
+  function set(show) {
+    shown = show;
+    var u = {showlegend: show};
+    Object.keys(gd.layout).forEach(function (k) {
+      if (/^legend\d*$/.test(k)) u[k + '.visible'] = show;
+    });
+    (gd.layout.updatemenus || []).forEach(function (m, i) { u['updatemenus[' + i + '].visible'] = show; });
+    Plotly.relayout(gd, u);
+    Array.prototype.forEach.call(document.querySelectorAll('.ui-panel'), function (el) {
+      el.style.display = show ? '' : 'none';
+    });
+    css.textContent = show ? '' : '.modebar-container{display:none !important}';
+    btn.textContent = show ? 'Hide UI (H)' : 'Show UI (H)';
+    btn.style.opacity = show ? '1' : '0';
+  }
+  btn.onmouseenter = function () { btn.style.opacity = '1'; };
+  btn.onmouseleave = function () { if (!shown) btn.style.opacity = '0'; };
+  btn.onclick = function () { set(!shown); };
+  document.addEventListener('keydown', function (e) {
+    var t = e.target.tagName;
+    if (t === 'TEXTAREA' || t === 'INPUT' || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'h' || e.key === 'H') set(!shown);
+  });
+  set(true);
+})();
+"""
+
 def load_view(text_or_path):
     """Parse a view copied from the HTML "View" panel (JSON string or file)."""
     import json
@@ -391,7 +435,8 @@ def write_fullscreen_html(fig, out_path, view=None, extra_js=()):
                        default_width="100%", default_height="100vh",
                        config={"responsive": True, "displaylogo": False,
                                "toImageButtonOptions": dict(format="png", scale=3)},
-                       post_script=[_FONT_RERENDER_JS, _VIEW_PANEL_JS] + list(extra_js))
+                       post_script=[_FONT_RERENDER_JS, _VIEW_PANEL_JS] + list(extra_js)
+                       + [_UI_TOGGLE_JS])
     style = ("<style>{0}\nhtml,body{{margin:0;padding:0;height:100%;overflow:hidden;"
              "background:#fff;font-family:{1};}}</style>").format(_font_face_css(), FONT_STACK)
     html = html.replace("<head>", "<head>\n" + style, 1)
