@@ -29,6 +29,12 @@ FONT_STACK = "'Nimbus Sans', 'Nimbus Sans L', Helvetica, Arial, sans-serif"
 
 SHELL_THRESHOLD = 0.07
 
+# Text sizes (px). ROI labels and legends set their own sizes explicitly.
+BASE_FONT_SIZE = 18
+AXIS_TITLE_SIZE = 18
+TICK_SIZE = 15
+BUTTON_SIZE = 15
+
 # One entry per drawable tract (hemisphere-specific). `group` is the legend
 # entry (L and R toggle together); `shell` names the avr_min_tract_counts
 # pair, shared by LC-TEC lateral and medial.
@@ -183,7 +189,7 @@ def add_label_trace(fig, go, xyz, text, legend="legend", size=14):
 def label_toggle_menu(label_idx, x=0.01, y=0.99):
     return dict(type="buttons", direction="right", x=x, y=y, xanchor="left",
                 yanchor="top", showactive=True, active=0,
-                font=dict(family=FONT_STACK, size=12),
+                font=dict(family=FONT_STACK, size=BUTTON_SIZE),
                 buttons=[dict(label="Labels on", method="restyle",
                               args=[{"visible": True}, [label_idx]]),
                          dict(label="Labels off", method="restyle",
@@ -191,7 +197,8 @@ def label_toggle_menu(label_idx, x=0.01, y=0.99):
 
 
 def scene_layout(**extra):
-    axis = dict(title_font=dict(family=FONT_STACK), tickfont=dict(family=FONT_STACK),
+    axis = dict(title_font=dict(family=FONT_STACK, size=AXIS_TITLE_SIZE),
+                tickfont=dict(family=FONT_STACK, size=TICK_SIZE),
                 backgroundcolor="white", gridcolor="#e3e3e3", showbackground=False)
     scene = dict(aspectmode="data", bgcolor="white",
                  xaxis=dict(axis, title="x (mm, R+)"),
@@ -241,7 +248,7 @@ if (document.fonts && document.fonts.load) {
 
 def write_fullscreen_html(fig, out_path):
     """Self-contained, full-window HTML with Nimbus Sans embedded."""
-    fig.update_layout(font=dict(family=FONT_STACK, color="#111111"),
+    fig.update_layout(font=dict(family=FONT_STACK, size=BASE_FONT_SIZE, color="#111111"),
                       paper_bgcolor="white", autosize=True)
     html = fig.to_html(include_plotlyjs=True, full_html=True,
                        default_width="100%", default_height="100vh",
